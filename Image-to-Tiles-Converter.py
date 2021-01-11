@@ -2,6 +2,7 @@
  
 from gimpfu import *
 from math import sqrt, ceil
+from array import array
 
 def dimensions_as_tiles(width, height, tiles):
 	tile_area = width * height / tiles
@@ -16,6 +17,13 @@ def dimensions_as_tiles(width, height, tiles):
 def image_setup(x, y, length):
 	return (x*y, x*length, y*length)
 
+def list_of_colors(layer):
+	colors = set()
+	for y in range(layer.height):
+		for x in range(layer.width):
+			colors.add( layer.get_pixel(x, y) )
+	return colors
+
 def plugin_main(image, drawable, number_of_tiles):
 	''' Calculate dimensions as number of tiles and tiles size. '''
 	(x_tiles, y_tiles, tile_side_length) = dimensions_as_tiles(image.width, image.height, number_of_tiles)
@@ -28,6 +36,10 @@ def plugin_main(image, drawable, number_of_tiles):
 	''' Resize image.  '''
 	pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
 	pdb.gimp_image_scale(image, image_new_width, image_new_height)
+
+	''' Determine colors to use.  '''
+	colors = list_of_colors( image.layers[1] )
+	#gimp.message( "".join(str(colors)) )
  
 register(
 	"python_fu_image_to_tiles",
