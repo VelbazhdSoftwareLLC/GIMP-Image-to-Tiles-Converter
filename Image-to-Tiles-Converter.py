@@ -1,5 +1,6 @@
 #!/usr/bin/python
- 
+
+import random
 from gimpfu import *
 from math import sqrt, ceil
 from array import array
@@ -28,8 +29,12 @@ def list_of_colors(layer):
 	return colors
 
 
-def radnom_tiles(canvas, colors, x, y, side):
-	pass
+def radnom_tiles(image, layer, colors, columns, rows, side):
+	for x in range(0, int(columns)):
+		for y in range(0, int(rows)):
+			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
+			pdb.gimp_context_set_background(random.choice(colors))
+			pdb.gimp_edit_fill(layer, 1)
 
 
 def plugin_main(image, drawable, number_of_tiles):
@@ -46,15 +51,15 @@ def plugin_main(image, drawable, number_of_tiles):
 	pdb.gimp_image_scale(image, image_new_width, image_new_height)
 
 	''' Determine colors to use.  '''
-	colors = list_of_colors(image.layers[1])
+	colors = list(list_of_colors(image.layers[1]))
 	# gimp.message( "".join(str(colors)) )
 
 	''' Create layer for the resulting image.  '''
-	approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 0, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
+	approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
 	pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
 	''' Draw random tiles.  '''
-	radnom_tiles(approximated, colors, x_tiles, y_tiles, tile_side_length)
+	radnom_tiles(image, approximated, colors, x_tiles, y_tiles, tile_side_length)
 
 
 register(
