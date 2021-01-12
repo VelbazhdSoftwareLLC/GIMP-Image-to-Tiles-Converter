@@ -28,6 +28,10 @@ def list_of_colors(layer):
 	return colors
 
 
+def radnom_tiles(canvas, colors, x, y, side):
+	pass
+
+
 def plugin_main(image, drawable, number_of_tiles):
 	''' Calculate dimensions as number of tiles and tiles size. '''
 	(x_tiles, y_tiles, tile_side_length) = dimensions_as_tiles(image.width, image.height, number_of_tiles)
@@ -45,7 +49,14 @@ def plugin_main(image, drawable, number_of_tiles):
 	colors = list_of_colors(image.layers[1])
 	# gimp.message( "".join(str(colors)) )
 
- 
+	''' Create layer for the resulting image.  '''
+	approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 0, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
+	pdb.gimp_image_insert_layer(image, approximated, None, 2)
+
+	''' Draw random tiles.  '''
+	radnom_tiles(approximated, colors, x_tiles, y_tiles, tile_side_length)
+
+
 register(
 	"python_fu_image_to_tiles",
 	"Raster image to tiles convertor plug-in.",
