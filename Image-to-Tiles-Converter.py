@@ -29,12 +29,62 @@ def list_of_colors(layer):
 	return colors
 
 
-def radnom_tiles(image, layer, colors, columns, rows, side):
+def draw_random_tiles(image, layer, colors, columns, rows, side):
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
 			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
 			pdb.gimp_context_set_background(random.choice(colors))
 			pdb.gimp_edit_fill(layer, 1)
+
+	pdb.gimp_selection_none(image)
+
+
+def average_color(layer):
+		r, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_RED, 0, 1)
+		g, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_GREEN, 0, 1)
+		b, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_BLUE, 0, 1)
+		return (int(r), int(g), int(b))
+
+
+def match_color(colors, average):
+	result = colors[0]
+	min = sqrt((result[0] - average[0]) ** 2 + (result[1] - average[1]) ** 2 + (result[2] - average[2]) ** 2)
+
+	for candidate in colors:
+		distance = sqrt((candidate[0] - average[0]) ** 2 + (candidate[1] - average[1]) ** 2 + (candidate[2] - average[2]) ** 2)
+		if distance < min:
+			result = candidate
+			min = distance
+
+	return result
+
+
+def match_tiles(image, original, colors, columns, rows, side):
+	matched = list()
+
+	for x in range(0, int(columns)):
+		for y in range(0, int(rows)):
+			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
+			average = average_color(original)
+			corresponding = match_color(colors, average)
+			matched.append(corresponding)
+
+	pdb.gimp_selection_none(image)
+
+	return matched
+
+
+def draw_solution_tiles(image, layer, solution, columns, rows, side):
+	i = 0
+
+	for x in range(0, int(columns)):
+		for y in range(0, int(rows)):
+			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
+			pdb.gimp_context_set_background(solution[i])
+			pdb.gimp_edit_fill(layer, 1)
+			i += 1
+
+	pdb.gimp_selection_none(image)
 
 
 def plugin_main(image, drawable, number_of_tiles):
@@ -50,16 +100,28 @@ def plugin_main(image, drawable, number_of_tiles):
 	pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
 	pdb.gimp_image_scale(image, image_new_width, image_new_height)
 
+	''' Layer of the original image.  '''
+	original = image.layers[0]
+
 	''' Determine colors to use.  '''
 	colors = list(list_of_colors(image.layers[1]))
 	# gimp.message( "".join(str(colors)) )
 
 	''' Create layer for the resulting image.  '''
-	approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
-	pdb.gimp_image_insert_layer(image, approximated, None, 2)
+	approximated = pdb.gimp_image_get_layer_by_name(image, "Approximated Image")
+	if approximated == None:
+		approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
+		pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
 	''' Draw random tiles.  '''
-	radnom_tiles(image, approximated, colors, x_tiles, y_tiles, tile_side_length)
+	# draw_random_tiles(image, approximated, colors, x_tiles, y_tiles, tile_side_length)
+
+	''' Match tiles to original colors.  '''
+	solution = match_tiles(image, original, colors, x_tiles, y_tiles, tile_side_length)
+	# gimp.message("".join(str(solution)))
+
+	''' Draw solution tiles.  '''
+	draw_solution_tiles(image, approximated, solution, x_tiles, y_tiles, tile_side_length)
 
 
 register(
