@@ -87,6 +87,18 @@ def draw_solution_tiles(image, layer, solution, columns, rows, side):
 	pdb.gimp_selection_none(image)
 
 
+def draw_tiles_numbering(image, layer, colors, solution, columns, rows, side):
+	i = 0
+
+	for x in range(0, int(columns)):
+		for y in range(0, int(rows)):
+			pdb.gimp_context_set_foreground((255 - solution[i][0], 255 - solution[i][1], 255 - solution[i][2]))
+			pdb.gimp_text_fontname(image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), 2, 0, int(side / 3), 0, "Sans")
+			i += 1
+
+	pdb.gimp_image_remove_layer(image, pdb.gimp_text_fontname(image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
+
+
 def plugin_main(image, drawable, number_of_tiles):
 	''' Calculate dimensions as number of tiles and tiles size. '''
 	(x_tiles, y_tiles, tile_side_length) = dimensions_as_tiles(image.width, image.height, number_of_tiles)
@@ -122,6 +134,9 @@ def plugin_main(image, drawable, number_of_tiles):
 
 	''' Draw solution tiles.  '''
 	draw_solution_tiles(image, approximated, solution, x_tiles, y_tiles, tile_side_length)
+
+	''' Enumerate tiles.  '''
+	# draw_tiles_numbering(image, approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
 
 
 register(
