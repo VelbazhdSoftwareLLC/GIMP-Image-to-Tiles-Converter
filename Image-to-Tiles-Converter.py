@@ -29,14 +29,14 @@ def list_of_colors(layer):
 	return colors
 
 
-def draw_random_tiles(image, layer, colors, columns, rows, side):
+def draw_random_tiles(layer, colors, columns, rows, side):
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
-			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
+			pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
 			pdb.gimp_context_set_background(random.choice(colors))
 			pdb.gimp_edit_fill(layer, 1)
 
-	pdb.gimp_selection_none(image)
+	pdb.gimp_selection_none(layer.image)
 
 
 def average_color(layer):
@@ -59,84 +59,115 @@ def match_color(colors, average):
 	return result
 
 
-def match_tiles(image, original, colors, columns, rows, side):
+def match_tiles(layer, colors, columns, rows, side):
 	matched = list()
 
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
-			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
-			average = average_color(original)
+			pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
+			average = average_color(layer)
 			corresponding = match_color(colors, average)
 			matched.append(corresponding)
 
-	pdb.gimp_selection_none(image)
+	pdb.gimp_selection_none(layer.image)
 
 	return matched
 
 
-def draw_solution_tiles(image, layer, solution, columns, rows, side):
+def draw_solution_tiles(layer, solution, columns, rows, side):
 	i = 0
 
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
-			pdb.gimp_image_select_rectangle(image, 2, x * side, y * side, side, side)
+			pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
 			pdb.gimp_context_set_background(solution[i])
 			pdb.gimp_edit_fill(layer, 1)
 			i += 1
 
-	pdb.gimp_selection_none(image)
+	pdb.gimp_selection_none(layer.image)
 
 
-def draw_tiles_numbering(image, layer, colors, solution, columns, rows, side):
+def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
 	i = 0
 
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
 			pdb.gimp_context_set_foreground((255 - solution[i][0], 255 - solution[i][1], 255 - solution[i][2]))
-			pdb.gimp_text_fontname(image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), 2, 0, int(side / 3), 0, "Sans")
+			pdb.gimp_text_fontname(layer.image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), 2, 0, int(side / 3), 0, "Sans")
 			i += 1
 
-	pdb.gimp_image_remove_layer(image, pdb.gimp_text_fontname(image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
+	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
+
+
+def draw_solution_statistics(layer, colors, solution, columns, rows, side):
+	pdb.gimp_image_select_rectangle(layer.image, 2, 0, 0, layer.width, layer.height)
+	pdb.gimp_context_set_background((255, 255, 255))
+	pdb.gimp_edit_fill(layer, 1)
+
+	counters = {}
+	for c in colors:
+		counters[c] = 0
+	for c in solution:
+		counters[c] += 1
+
+	for y in range(0, len(colors)):
+		pdb.gimp_image_select_rectangle(layer.image, 2, 0, y * side, side, side)
+		pdb.gimp_context_set_background(colors[y])
+		pdb.gimp_edit_fill(layer, 1)
+		pdb.gimp_context_set_foreground((0, 0, 0))
+		pdb.gimp_text_fontname(layer.image, layer, 1 * side, y * side, str(y + 1), 2, 0, int(side / 2), 0, "Sans")
+		pdb.gimp_text_fontname(layer.image, layer, 2 * side, y * side, str(counters[colors[y]]), 2, 0, int(side / 2), 0, "Sans")
+		pdb.gimp_text_fontname(layer.image, layer, 4 * side, y * side, str(colors[y]), 2, 0, int(side / 2), 0, "Sans")
+
+	pdb.gimp_selection_none(layer.image)
+	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
 
 def plugin_main(image, drawable, number_of_tiles):
+	''' Layer of the original image.  '''
+	original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
+
 	''' Calculate dimensions as number of tiles and tiles size. '''
-	(x_tiles, y_tiles, tile_side_length) = dimensions_as_tiles(image.width, image.height, number_of_tiles)
-	# gimp.message( "".join(str((number_of_tiles, x_tiles, y_tiles, tile_side_length))) )
+	(x_tiles, y_tiles, tile_side_length) = dimensions_as_tiles(original.width, original.height, number_of_tiles)
 
 	''' Calculate image resize parameters. '''
 	(number_of_tiles, image_new_width, image_new_height) = image_setup(x_tiles, y_tiles, tile_side_length)
-	# gimp.message( "".join(str((number_of_tiles, image.width, image.height, image_new_width, image_new_height))) )
 
 	''' Resize image.  '''
 	pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
-	pdb.gimp_image_scale(image, image_new_width, image_new_height)
-
-	''' Layer of the original image.  '''
-	original = image.layers[0]
+	pdb.gimp_layer_scale(original, image_new_width, image_new_height, False)
+	pdb.gimp_image_resize_to_layers(image)
 
 	''' Determine colors to use.  '''
-	colors = list(list_of_colors(image.layers[1]))
-	# gimp.message( "".join(str(colors)) )
+	colors = list(list_of_colors(pdb.gimp_image_get_layer_by_name(image, "Color Map")))
 
-	''' Create layer for the resulting image.  '''
+	''' Create layer for the approximated image.  '''
 	approximated = pdb.gimp_image_get_layer_by_name(image, "Approximated Image")
 	if approximated == None:
-		approximated = pdb.gimp_layer_new(image, image.width, image.height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
+		approximated = pdb.gimp_layer_new(image, image_new_width, image_new_height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
 		pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
 	''' Draw random tiles.  '''
-	# draw_random_tiles(image, approximated, colors, x_tiles, y_tiles, tile_side_length)
+	# draw_random_tiles(approximated, colors, x_tiles, y_tiles, tile_side_length)
 
 	''' Match tiles to original colors.  '''
-	solution = match_tiles(image, original, colors, x_tiles, y_tiles, tile_side_length)
-	# gimp.message("".join(str(solution)))
+	solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
 
 	''' Draw solution tiles.  '''
-	draw_solution_tiles(image, approximated, solution, x_tiles, y_tiles, tile_side_length)
+	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
 	''' Enumerate tiles.  '''
-	# draw_tiles_numbering(image, approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
+	# draw_tiles_numbering(approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
+
+	''' Create layer for tiles statistics.  '''
+	statistics = pdb.gimp_image_get_layer_by_name(image, "Tiles Statistics")
+	# if statistics == None:
+	# 	statistics = pdb.gimp_layer_new(image, x_tiles * tile_side_length, len(colors) * tile_side_length, RGB_IMAGE, "Tiles Statistics", 100, NORMAL_MODE)
+	# 	pdb.gimp_image_insert_layer(image, statistics, None, 3)
+	# 	pdb.gimp_image_resize_to_layers(image)
+
+	''' Draw tiles statistics.  '''
+	# draw_solution_statistics(statistics, colors, solution, x_tiles, y_tiles, tile_side_length)
 
 
 register(
