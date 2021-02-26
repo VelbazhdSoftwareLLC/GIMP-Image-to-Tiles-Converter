@@ -123,7 +123,7 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
 
-def plugin_main(image, drawable, number_of_tiles):
+def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, crossover_rate=1.0, mutation_rate=0.0, solution_numbering=FALSE, solution_statistics=FALSE):
 	''' Layer of the original image.  '''
 	original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
 
@@ -157,17 +157,19 @@ def plugin_main(image, drawable, number_of_tiles):
 	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
 	''' Enumerate tiles.  '''
-	# draw_tiles_numbering(approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
+	if solution_numbering == TRUE:
+		draw_tiles_numbering(approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
 
 	''' Create layer for tiles statistics.  '''
 	statistics = pdb.gimp_image_get_layer_by_name(image, "Tiles Statistics")
-	# if statistics == None:
-	# 	statistics = pdb.gimp_layer_new(image, x_tiles * tile_side_length, len(colors) * tile_side_length, RGB_IMAGE, "Tiles Statistics", 100, NORMAL_MODE)
-	# 	pdb.gimp_image_insert_layer(image, statistics, None, 3)
-	# 	pdb.gimp_image_resize_to_layers(image)
-
+	
 	''' Draw tiles statistics.  '''
-	# draw_solution_statistics(statistics, colors, solution, x_tiles, y_tiles, tile_side_length)
+	if solution_statistics == TRUE:
+		if statistics == None:
+			statistics = pdb.gimp_layer_new(image, x_tiles * tile_side_length, len(colors) * tile_side_length, RGB_IMAGE, "Tiles Statistics", 100, NORMAL_MODE)
+			pdb.gimp_image_insert_layer(image, statistics, None, 3)
+			pdb.gimp_image_resize_to_layers(image)
+		draw_solution_statistics(statistics, colors, solution, x_tiles, y_tiles, tile_side_length)
 
 
 register(
@@ -180,7 +182,14 @@ register(
 	"<Image>/Image/Custom/Image to Tiles Converter",
 	"RGB",
 	[
+		# (PF_IMAGE, "image", "Input Image", None),
+		# (PF_DRAWABLE, "drawable", "Input Drawable", None),
 		(PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
+		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
+		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 1.0),
+		(PF_FLOAT, "mutation_rate", "Genetic Algorithm Mutation Rate", 0.0),
+		(PF_BOOL, "solution_numbering", "Numbering of the Result Solution", FALSE),
+		(PF_BOOL, "solution_statistics", "Statistics of the Result Solution", FALSE),
 	],
 	[],
 	plugin_main,
