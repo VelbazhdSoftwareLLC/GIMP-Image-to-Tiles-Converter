@@ -130,11 +130,28 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 
 def random_chromosome(colors, length):
 	chromosome = list()
-
 	for x in range(0, int(length)):
 		chromosome.append(random.choice(colors))
-
 	return chromosome
+
+
+def select(population, fitness):
+	''' Selection of three unique individuals. '''
+	while True:
+		child = random.choice(population)
+		parent1 = random.choice(population)
+		parent2 = random.choice(population)
+		if child == parent1:
+			continue
+		if child == parent2:
+			continue
+		if parent1 == parent2:
+			continue
+		break
+
+	# TODO Implement elitism in such a way that the child always is the weakest individual.
+
+	return [child, parent1, parent2]
 
 
 def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
@@ -144,13 +161,17 @@ def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 
 	# TODO Implement initial population which is not random.
 
-	''' Initialize random population.  '''
-	for x in range(0, population_size):
+	''' Initialize random population. '''
+	for p in range(0, population_size):
 		population.append(random_chromosome(colors, (x_tiles * y_tiles)))
 		fitness.append(float('inf'))
-	best_index = random.randint(0, population_size - 1)
+	best = random.choice(population)
 
-	return population[ best_index ]
+	''' Each generation has a population size of individuals. '''
+	for g in range(0, number_of_generations * population_size):
+		[child, parent1, parent2] = select(population, fitness)
+
+	return best
 
 
 def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
