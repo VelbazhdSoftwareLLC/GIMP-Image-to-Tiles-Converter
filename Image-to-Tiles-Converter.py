@@ -128,9 +128,29 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
 
+def random_chromosome(colors, length):
+	chromosome = list()
+
+	for x in range(0, int(length)):
+		chromosome.append(random.choice(colors))
+
+	return chromosome
+
+
 def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 					  number_of_generations, population_size, crossover_rate, mutation_rate):
-	pass
+	fitness = list()
+	population = list()
+
+	# TODO Implement initial population which is not random.
+
+	''' Initialize random population.  '''
+	for x in range(0, population_size):
+		population.append(random_chromosome(colors, (x_tiles * y_tiles)))
+		fitness.append(float('inf'))
+	best_index = random.randint(0, population_size - 1)
+
+	return population[ best_index ]
 
 
 def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
@@ -204,7 +224,6 @@ register(
 		# (PF_IMAGE, "image", "Input Image", None),
 		# (PF_DRAWABLE, "drawable", "Input Drawable", None),
 		(PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
-  # (PF_RADIO, "optimizer", "Optimizer", 1, (("Simple", 1), ("Genetic Algorithm", 2))),
 		(PF_RADIO, "optimizer", "Optimizer", "Simple", (("Simple", "Simple"), ("Genetic Algorithm", "Genetic Algorithm"))),
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
 		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
