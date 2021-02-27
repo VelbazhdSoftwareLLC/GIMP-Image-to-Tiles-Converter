@@ -110,14 +110,19 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	for c in solution:
 		counters[c] += 1
 
+	''' Statistics text should be big enough. '''
+	size = side
+	if size < 20:
+		size = 20
+
 	for y in range(0, len(colors)):
-		pdb.gimp_image_select_rectangle(layer.image, 2, 0, y * side, side, side)
+		pdb.gimp_image_select_rectangle(layer.image, 2, 0, y * size, size, size)
 		pdb.gimp_context_set_background(colors[y])
 		pdb.gimp_edit_fill(layer, 1)
 		pdb.gimp_context_set_foreground((0, 0, 0))
-		pdb.gimp_text_fontname(layer.image, layer, 1 * side, y * side, str(y + 1), 2, 0, int(side / 2), 0, "Sans")
-		pdb.gimp_text_fontname(layer.image, layer, 2 * side, y * side, str(counters[colors[y]]), 2, 0, int(side / 2), 0, "Sans")
-		pdb.gimp_text_fontname(layer.image, layer, 4 * side, y * side, str(colors[y]), 2, 0, int(side / 2), 0, "Sans")
+		pdb.gimp_text_fontname(layer.image, layer, 1 * size, y * size, str(y + 1), 2, 0, int(size / 2), 0, "Sans")
+		pdb.gimp_text_fontname(layer.image, layer, 2 * size, y * size, str(counters[colors[y]]), 2, 0, int(size / 2), 0, "Sans")
+		pdb.gimp_text_fontname(layer.image, layer, 4 * size, y * size, str(colors[y]), 2, 0, int(size / 2), 0, "Sans")
 
 	pdb.gimp_selection_none(layer.image)
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
@@ -152,16 +157,13 @@ def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, pop
 		approximated = pdb.gimp_layer_new(image, image_new_width, image_new_height, RGB_IMAGE, "Approximated Image", 100, NORMAL_MODE)  # DIFFERENCE_MODE SUBTRACT_MODE
 		pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
-	''' Draw random tiles.  '''
-	# draw_random_tiles(approximated, colors, x_tiles, y_tiles, tile_side_length)
-
 	''' Match tiles to original colors.  '''
 	solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
 
 	''' Draw solution tiles.  '''
 	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
-	''' Enumerate tiles.  '''
+	''' Numbering tiles.  '''
 	if solution_numbering == TRUE:
 		draw_tiles_numbering(approximated, colors, solution, x_tiles, y_tiles, tile_side_length)
 
@@ -171,7 +173,7 @@ def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, pop
 	''' Draw tiles statistics.  '''
 	if solution_statistics == TRUE:
 		if statistics == None:
-			statistics = pdb.gimp_layer_new(image, x_tiles * tile_side_length, len(colors) * tile_side_length, RGB_IMAGE, "Tiles Statistics", 100, NORMAL_MODE)
+			statistics = pdb.gimp_layer_new(image, 10 * x_tiles * tile_side_length, 10 * len(colors) * tile_side_length, RGB_IMAGE, "Tiles Statistics", 100, NORMAL_MODE)
 			pdb.gimp_image_insert_layer(image, statistics, None, 3)
 			pdb.gimp_image_resize_to_layers(image)
 		draw_solution_statistics(statistics, colors, solution, x_tiles, y_tiles, tile_side_length)
