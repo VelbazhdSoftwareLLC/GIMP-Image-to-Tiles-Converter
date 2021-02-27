@@ -123,7 +123,8 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
 
-def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, crossover_rate=1.0, mutation_rate=0.0, solution_numbering=FALSE, solution_statistics=FALSE):
+def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, population_size=3, crossover_rate=1.0, mutation_rate=0.0,
+			solution_numbering=FALSE, solution_statistics=FALSE, image_resize=TRUE):
 	''' Layer of the original image.  '''
 	original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
 
@@ -134,9 +135,13 @@ def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, cro
 	(number_of_tiles, image_new_width, image_new_height) = image_setup(x_tiles, y_tiles, tile_side_length)
 
 	''' Resize image.  '''
-	pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
-	pdb.gimp_layer_scale(original, image_new_width, image_new_height, False)
-	pdb.gimp_image_resize_to_layers(image)
+	if image_resize == TRUE:
+		pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
+		pdb.gimp_layer_scale(original, image_new_width, image_new_height, False)
+		pdb.gimp_image_resize_to_layers(image)
+		
+	''' Setup layer of the original image for difference calculation.  '''
+	original.mode = DIFFERENCE_MODE
 
 	''' Determine colors to use.  '''
 	colors = list(list_of_colors(pdb.gimp_image_get_layer_by_name(image, "Color Map")))
@@ -180,16 +185,18 @@ register(
 	"Velbazhd Software LLC\nGPLv3 License",
 	"2021",
 	"<Image>/Image/Custom/Image to Tiles Converter",
-	"RGB",
+	"RGB*",
 	[
 		# (PF_IMAGE, "image", "Input Image", None),
 		# (PF_DRAWABLE, "drawable", "Input Drawable", None),
 		(PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
+		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
 		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 1.0),
 		(PF_FLOAT, "mutation_rate", "Genetic Algorithm Mutation Rate", 0.0),
 		(PF_BOOL, "solution_numbering", "Numbering of the Result Solution", FALSE),
 		(PF_BOOL, "solution_statistics", "Statistics of the Result Solution", FALSE),
+		(PF_BOOL, "image_resize", "Image Resize to Fit Exact Tiles", TRUE),
 	],
 	[],
 	plugin_main,
