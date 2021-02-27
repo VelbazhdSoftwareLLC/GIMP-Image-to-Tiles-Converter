@@ -153,6 +153,14 @@ def select(population, fitness):
 
 	return [child, parent1, parent2]
 
+def crossover(probability, child, parent1, parent2):
+	if random.random() >= probability:
+		return
+	for i in range(0, len(child)):
+		if random.choice([True, False]):
+			child[i] = parent1[i]
+		else:
+			child[i] = parent2[i]
 
 def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 					  number_of_generations, population_size, crossover_rate, mutation_rate):
@@ -170,6 +178,7 @@ def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 	''' Each generation has a population size of individuals. '''
 	for g in range(0, number_of_generations * population_size):
 		[child, parent1, parent2] = select(population, fitness)
+		crossover(crossover_rate, child, parent1, parent2)
 
 	return best
 
@@ -249,7 +258,7 @@ register(
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
 		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
 		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 1.0),
-		(PF_FLOAT, "mutation_rate", "Genetic Algorithm Mutation Rate", 0.0),
+		(PF_FLOAT, "mutation_rate", "Genetic Algorithm Mutation Rate", 0.01),
 		(PF_BOOL, "solution_numbering", "Numbering of the Result Solution", FALSE),
 		(PF_BOOL, "solution_statistics", "Statistics of the Result Solution", FALSE),
 		(PF_BOOL, "image_resize", "Image Resize to Fit Exact Tiles", TRUE),
