@@ -153,14 +153,25 @@ def select(population, fitness):
 
 	return [child, parent1, parent2]
 
+
 def crossover(probability, child, parent1, parent2):
 	if random.random() >= probability:
 		return
+
 	for i in range(0, len(child)):
 		if random.choice([True, False]):
 			child[i] = parent1[i]
 		else:
 			child[i] = parent2[i]
+
+
+def mutation(probability, colors, child):
+	for i in range(0, len(child)):
+		if random.random() >= probability:
+			continue
+		else:
+			child[i] = random.choice(colors)
+
 
 def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 					  number_of_generations, population_size, crossover_rate, mutation_rate):
@@ -179,6 +190,8 @@ def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 	for g in range(0, number_of_generations * population_size):
 		[child, parent1, parent2] = select(population, fitness)
 		crossover(crossover_rate, child, parent1, parent2)
+		mutation(mutation_rate, colors, child)
+		# value = evaluate(original, colors, x_tiles, y_tiles, tile_side_length, child)
 
 	return best
 
