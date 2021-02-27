@@ -128,7 +128,13 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
 
-def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, population_size=3, crossover_rate=1.0, mutation_rate=0.0,
+def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
+					  number_of_generations, population_size, crossover_rate, mutation_rate):
+	pass
+
+
+def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
+			number_of_generations=0, population_size=3, crossover_rate=1.0, mutation_rate=0.0,
 			solution_numbering=FALSE, solution_statistics=FALSE, image_resize=TRUE):
 	''' Layer of the original image.  '''
 	original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
@@ -158,7 +164,13 @@ def plugin_main(image, drawable, number_of_tiles=1, number_of_generations=0, pop
 		pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
 	''' Match tiles to original colors.  '''
-	solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
+	if optimizer == "Simple":
+		solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
+
+	''' Search for a sub-optimal solution with a genetic algorithm.  '''
+	if optimizer == "Genetic Algorithm":
+		solution = genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
+		        					 number_of_generations, population_size, crossover_rate, mutation_rate)
 
 	''' Draw solution tiles.  '''
 	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
@@ -192,6 +204,8 @@ register(
 		# (PF_IMAGE, "image", "Input Image", None),
 		# (PF_DRAWABLE, "drawable", "Input Drawable", None),
 		(PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
+  # (PF_RADIO, "optimizer", "Optimizer", 1, (("Simple", 1), ("Genetic Algorithm", 2))),
+		(PF_RADIO, "optimizer", "Optimizer", "Simple", (("Simple", "Simple"), ("Genetic Algorithm", "Genetic Algorithm"))),
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
 		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
 		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 1.0),
