@@ -26,7 +26,6 @@ import random
 from gimpfu import *
 from math import sqrt, ceil
 from array import array
-from __builtin__ import True
 
 """
 Estimating the size of the image in the number of tiles by x and y.
