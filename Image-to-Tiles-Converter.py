@@ -1,9 +1,41 @@
 #!/usr/bin/python
 
+""" ============================================================================
+= GIMP Image to Tiles Converter version 1.0.0                                  =
+= Copyrights (C) 2021 Velbazhd Software LLC                                    =
+=                                                                              =
+= developed by Todor Balabanov ( todor.balabanov@gmail.com )                   =
+= Sofia, Bulgaria                                                              =
+=                                                                              =
+= This program is free software: you can redistribute it and/or modify         =
+= it under the terms of the GNU General Public License as published by         =
+= the Free Software Foundation, either version 3 of the License, or            =
+= (at your option) any later version.                                          =
+=                                                                              =
+= This program is distributed in the hope that it will be useful,              =
+= but WITHOUT ANY WARRANTY; without even the implied warranty of               =
+= MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the                =
+= GNU General Public License for more details.                                 =
+=                                                                              =
+= You should have received a copy of the GNU General Public License            =
+= along with this program. If not, see <http://www.gnu.org/licenses/>.         =
+=                                                                              =
+============================================================================ """
+
 import random
 from gimpfu import *
 from math import sqrt, ceil
 from array import array
+
+"""
+Estimating the size of the image in the number of tiles by x and y.
+
+@param width Image width in pixels.
+@param height Image height in pixels.
+@param tilse A total number of desired tiles to fill the image.
+
+@return A tuple of image width in tiles, image height in tiles, and single square tile size in pixels.
+"""
 
 
 def dimensions_as_tiles(width, height, tiles):
@@ -16,9 +48,27 @@ def dimensions_as_tiles(width, height, tiles):
 
 	return (width_in_tiles, height_in_tiles, tile_side)
 
+"""
+Calculation of image resize parameters.
+
+@param x Width of the image in a number of tiles.
+@param y Height of the image in a number of tiles.
+@param length Length of single square tile in pixels.
+
+@return A tuple of total tiles needed, image new width in pixels, and image new height in pixels.
+"""
+
 
 def image_setup(x, y, length):
 	return (x * y, x * length, y * length)
+
+"""
+List all colors used for the tiles by extracting them from a colormap layer. Each pixel with specific color is included.
+
+@param layer Colormap layer.
+
+@return List of tiles colors.
+"""
 
 
 def list_of_colors(layer):
@@ -27,6 +77,16 @@ def list_of_colors(layer):
 		for x in range(layer.width):
 			colors.add(layer.get_pixel(x, y))
 	return colors
+
+"""
+Assembling random tiles with the shape of the original image.
+
+@param layer Resulting layer for the random image.
+@param colors List of tiles colors.
+@param columns Width of the resulting image as a number of tiles.
+@param rows Height of the resulting image as a number of tiles.
+@param size Length of a single square tiles side in pixels.
+"""
 
 
 def draw_random_tiles(layer, colors, columns, rows, side):
@@ -38,12 +98,29 @@ def draw_random_tiles(layer, colors, columns, rows, side):
 
 	pdb.gimp_selection_none(layer.image)
 
+"""
+Estimation of an average color in a layer.
+
+@param layer The layer in which region average color is calculated.
+
+@return Average color as RGB values.
+"""
+
 
 def average_color(layer):
 		r, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_RED, 0, 1)
 		g, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_GREEN, 0, 1)
 		b, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_BLUE, 0, 1)
 		return (int(r), int(g), int(b))
+
+"""
+Match an RGB color to the closest color in a list of colors.
+
+@param colors List of tiles colors.
+@param average The RGB value of the average color.
+
+@return The closest color by Euclidean distance in RGB channels.
+"""
 
 
 def match_color(colors, average):
@@ -58,10 +135,21 @@ def match_color(colors, average):
 
 	return result
 
+"""
+Match tiles to average close colors.
+
+@param layer Layer of the original image.
+@param colors List of tiles colors.
+@param columns Width of the resulting image as a number of tiles.
+@param rows Height of the resulting image as a number of tiles.
+@param side Length of a single square tiles side in pixels.
+
+@return List of matched colors for the tiles.
+"""
+
 
 def match_tiles(layer, colors, columns, rows, side):
 	matched = list()
-
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
 			pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
@@ -70,21 +158,38 @@ def match_tiles(layer, colors, columns, rows, side):
 			matched.append(corresponding)
 
 	pdb.gimp_selection_none(layer.image)
-
 	return matched
+
+"""
+Drawing the list of tiles.
+
+@param solution List of tiles colors for the image approximation.
+@param columns Width of the resulting image as a number of tiles.
+@param rows Height of the resulting image as a number of tiles.
+@param side Length of a single square tiles side in pixels.
+"""
 
 
 def draw_solution_tiles(layer, solution, columns, rows, side):
 	i = 0
-
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
 			pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
 			pdb.gimp_context_set_background(solution[i])
 			pdb.gimp_edit_fill(layer, 1)
 			i += 1
-
 	pdb.gimp_selection_none(layer.image)
+
+"""
+Draw numbers on tiles.
+
+@param layer Layer of the approximated image.
+@param colors List of tiles colors.
+@param solution List of tiles colors for the image approximation.
+@param columns Width of the resulting image as a number of tiles.
+@param rows Height of the resulting image as a number of tiles.
+@param side Length of a single square tiles side in pixels.
+"""
 
 
 def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
@@ -94,8 +199,18 @@ def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
 			pdb.gimp_context_set_foreground((255 - solution[i][0], 255 - solution[i][1], 255 - solution[i][2]))
 			pdb.gimp_text_fontname(layer.image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), -1, FALSE, int(3 * side / 4), 0, "Sans")
 			i += 1
-
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
+
+"""
+Draw tiles statistics.
+
+@param layer Layer of the approximated image statistics.
+@param colors List of tiles colors.
+@param solution List of tiles colors for the image approximation.
+@param columns Width of the resulting image as a number of tiles.
+@param rows Height of the resulting image as a number of tiles.
+@param side Length of a single square tiles side in pixels.
+"""
 
 
 def draw_solution_statistics(layer, colors, solution, columns, rows, side):
@@ -126,12 +241,30 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
 	pdb.gimp_selection_none(layer.image)
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
 
+"""
+Generation of a random chromosome.
+
+@param colors List of tiles colors.
+@param length The length of the newly generated chromosome.
+
+@return Randomly generated chromosome.
+"""
+
 
 def random_chromosome(colors, length):
 	chromosome = list()
 	for x in range(0, int(length)):
 		chromosome.append(random.choice(colors))
 	return chromosome
+
+"""
+Selection of two parents and a single child.
+
+@param population Genetic algorithm population.
+@param fitness The fitness values of the individuals in the population.
+
+@return Selected parents and the child.
+"""
 
 
 def select(population, fitness):
@@ -148,9 +281,26 @@ def select(population, fitness):
 			continue
 		break
 
-	# TODO Implement elitism in such a way that the child always is the weakest individual.
+	''' Implement elitism in such a way that the child always is the weakest individual. '''
+	if fitness[population.index(child)] < fitness[population.index(parent1)]:
+		buffer = child
+		child = parent1
+		parent1 = buffer
+	if fitness[population.index(child)] < fitness[population.index(parent2)]:
+		buffer = child
+		child = parent2
+		parent2 = buffer
 
 	return [child, parent1, parent2]
+
+"""
+Uniform crossover.
+
+@param probability Crossover probability rate.
+@param child Crossover result. 
+@param parent1 First parent.
+@param parent2 Second parent.
+"""
 
 
 def crossover(probability, child, parent1, parent2):
@@ -163,6 +313,14 @@ def crossover(probability, child, parent1, parent2):
 		else:
 			child[i] = parent2[i]
 
+"""
+Tile color mutation.
+
+@param probability Mutation probability rate.
+@param colors List of tiles colors.
+@param child Mutation result. 
+"""
+
 
 def mutation(probability, colors, child):
 	for i in range(0, len(child)):
@@ -170,6 +328,22 @@ def mutation(probability, colors, child):
 			continue
 		else:
 			child[i] = random.choice(colors)
+
+"""
+Genetic algorithm optimizer.
+
+@param original Layer of the original image. 
+@param colors List of tiles colors.
+@param x_tiles Width of the approximated image in tiles.
+@param y_tiles Height of the approximated image in tiles.
+@param tile_side_length Size of a single square tile side in pixels. 
+@param number_of_generations Number of evolution generations. 
+@param population_size Population size.
+@param crossover_rate Crossover rate.
+@param mutation_rate Mutation rate.
+
+@return The best solution found.
+"""
 
 
 def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
@@ -193,6 +367,22 @@ def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 		# value = evaluate(original, colors, x_tiles, y_tiles, tile_side_length, child)
 
 	return best
+
+"""
+Plug-in single entry point.
+
+@param image Image reference.
+@param drawable Drawable object reference.
+@param number_of_tiles Number of desired tiles into approximated image.
+@param optimizer Selection from the available optimizers.
+@param number_of_generations Number of generations for genetic algorithm evolutions.
+@param population_size Population size.
+@param crossover_rate Crossover rate.
+@param mutation_rate Mutation rate.
+@param solution_numbering Numbers on tiles flag.
+@param solution_statistics Solution tiles statistics flag.
+@param image_resize Image to fit tiles resize flag.
+"""
 
 
 def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
