@@ -89,11 +89,10 @@ def draw_solution_tiles(layer, solution, columns, rows, side):
 
 def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
 	i = 0
-
 	for x in range(0, int(columns)):
 		for y in range(0, int(rows)):
 			pdb.gimp_context_set_foreground((255 - solution[i][0], 255 - solution[i][1], 255 - solution[i][2]))
-			pdb.gimp_text_fontname(layer.image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), 2, 0, int(side / 3), 0, "Sans")
+			pdb.gimp_text_fontname(layer.image, layer, x * side, y * side, str(colors.index(solution[i]) + 1), -1, FALSE, int(3 * side / 4), 0, "Sans")
 			i += 1
 
 	pdb.gimp_image_remove_layer(layer.image, pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"))
@@ -270,7 +269,7 @@ register(
 		(PF_RADIO, "optimizer", "Optimizer", "Simple", (("Simple", "Simple"), ("Genetic Algorithm", "Genetic Algorithm"))),
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
 		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
-		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 1.0),
+		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 0.95),
 		(PF_FLOAT, "mutation_rate", "Genetic Algorithm Mutation Rate", 0.01),
 		(PF_BOOL, "solution_numbering", "Numbering of the Result Solution", FALSE),
 		(PF_BOOL, "solution_statistics", "Statistics of the Result Solution", FALSE),
