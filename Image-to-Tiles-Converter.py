@@ -26,6 +26,7 @@ import random
 from gimpfu import *
 from math import sqrt, ceil
 from array import array
+from __builtin__ import True
 
 """
 Estimating the size of the image in the number of tiles by x and y.
@@ -330,9 +331,54 @@ def mutation(probability, colors, child):
 			child[i] = random.choice(colors)
 
 """
+Fitness value estimation.
+
+"""
+
+"""
+Chromosome fitness value evaluation.
+
+@param original Layer of the original image.
+@param approximated Layer of the approximated image.
+@param colors List of tiles colors.
+@param x_tiles Width of the approximated image in tiles.
+@param y_tiles Height of the approximated image in tiles.
+@param tile_side_length Size of a single square tile side in pixels.
+@param solution The solution to be evaluated.
+
+@return Fitness value calculated.
+"""
+
+
+def evaluate(original, approximated, colors, x_tiles, y_tiles, tile_side_length, solution):
+	value = float('inf');
+	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
+
+	''' Make visible only original image and approximated image.  '''
+	for layer in original.image.layers:
+		layer.visible = False
+	original.visible = True
+	approximated.visible = True
+
+	''' Generate the difference between the original image and the approximated image.  '''
+	pdb.gimp_edit_copy_visible(original.image)
+	floating = pdb.gimp_edit_paste(approximated, False)
+	pdb.gimp_floating_sel_anchor(floating)
+	original.visible = False
+
+	''' Average color calculation. '''
+	r, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_RED, 0, 1)
+	g, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_GREEN, 0, 1)
+	b, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_BLUE, 0, 1)
+	value = (r + g + b) / 3.0
+
+	return value
+
+"""
 Genetic algorithm optimizer.
 
 @param original Layer of the original image. 
+@param approximated Layer of the approximated image.
 @param colors List of tiles colors.
 @param x_tiles Width of the approximated image in tiles.
 @param y_tiles Height of the approximated image in tiles.
@@ -346,7 +392,7 @@ Genetic algorithm optimizer.
 """
 
 
-def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
+def genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_side_length,
 					  number_of_generations, population_size, crossover_rate, mutation_rate):
 	fitness = list()
 	population = list()
@@ -364,7 +410,7 @@ def genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
 		[child, parent1, parent2] = select(population, fitness)
 		crossover(crossover_rate, child, parent1, parent2)
 		mutation(mutation_rate, colors, child)
-		# value = evaluate(original, colors, x_tiles, y_tiles, tile_side_length, child)
+		fitness[population.index(child)] = evaluate(original, approximated, colors, x_tiles, y_tiles, tile_side_length, child)
 
 	return best
 
@@ -421,7 +467,7 @@ def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
 
 	''' Search for a sub-optimal solution with a genetic algorithm.  '''
 	if optimizer == "Genetic Algorithm":
-		solution = genetic_algorithm(original, colors, x_tiles, y_tiles, tile_side_length,
+		solution = genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_side_length,
 		        					 number_of_generations, population_size, crossover_rate, mutation_rate)
 
 	''' Draw solution tiles.  '''
