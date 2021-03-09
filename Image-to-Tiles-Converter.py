@@ -22,6 +22,7 @@
 =                                                                              =
 ============================================================================ """
 
+import copy
 import random
 from gimpfu import *
 from math import sqrt, ceil
@@ -392,16 +393,22 @@ Genetic algorithm optimizer.
 
 
 def genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_side_length,
-					  number_of_generations, population_size, crossover_rate, mutation_rate):
+					  suboptimal_initialization, number_of_generations, population_size, crossover_rate, mutation_rate):
 	fitness = list()
 	population = list()
 
-	# TODO Implement initial population which is not random.
+	if suboptimal_initialization:
+		''' Initial population which is sub-optimal. '''
+		solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
+		for p in range(0, population_size):
+			population.append( copy.deepcopy(solution) )
+			fitness.append(float('inf'))
+	else:
+		''' Initialize random population. '''
+		for p in range(0, population_size):
+			population.append(random_chromosome(colors, (x_tiles * y_tiles)))
+			fitness.append(float('inf'))
 
-	''' Initialize random population. '''
-	for p in range(0, population_size):
-		population.append(random_chromosome(colors, (x_tiles * y_tiles)))
-		fitness.append(float('inf'))
 	best = random.choice(population)
 
 	''' Each generation has a population size of individuals. '''
@@ -431,7 +438,7 @@ Plug-in single entry point.
 
 
 def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
-			number_of_generations=0, population_size=3, crossover_rate=1.0, mutation_rate=0.0,
+			suboptimal_initialization=TRUE, number_of_generations=0, population_size=3, crossover_rate=1.0, mutation_rate=0.0,
 			solution_numbering=FALSE, solution_statistics=FALSE, image_resize=TRUE):
 	''' Layer of the original image.  '''
 	original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
@@ -467,7 +474,7 @@ def plugin_main(image, drawable, number_of_tiles=1, optimizer="Simple",
 	''' Search for a sub-optimal solution with a genetic algorithm.  '''
 	if optimizer == "Genetic Algorithm":
 		solution = genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_side_length,
-		        					 number_of_generations, population_size, crossover_rate, mutation_rate)
+									 suboptimal_initialization, number_of_generations, population_size, crossover_rate, mutation_rate)
 
 	''' Draw solution tiles.  '''
 	draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
@@ -502,6 +509,7 @@ register(
 		# (PF_DRAWABLE, "drawable", "Input Drawable", None),
 		(PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
 		(PF_RADIO, "optimizer", "Optimizer", "Simple", (("Simple", "Simple"), ("Genetic Algorithm", "Genetic Algorithm"))),
+		(PF_BOOL, "suboptimal_initialization", "Initialize the Population with Suboptimal Solutions", TRUE),
 		(PF_INT32, "number_of_generations", "Number of Genetic Algorithm Generations", 0),
 		(PF_INT32, "population_size", "Genetic Algorithm Population Size", 3),
 		(PF_FLOAT, "crossover_rate", "Genetic Algorithm Crossover Rate", 0.95),
