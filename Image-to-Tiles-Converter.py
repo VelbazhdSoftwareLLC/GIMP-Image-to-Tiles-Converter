@@ -1,4 +1,4 @@
-﻿#!/usr/bin/python
+﻿#!/usr/bin/env python3
 
 """ ============================================================================
 = GIMP Image to Tiles Converter version 1.0.0                                  =
@@ -22,12 +22,424 @@
 =                                                                              =
 ============================================================================ """
 
+import sys
 import random
 from copy import deepcopy
-from gimpfu import *
 from math import ceil, sqrt
+import gi
+gi.require_version('Gimp', '3.0')
+gi.require_version('Gegl', '3.0')
+from gi.repository import Gimp, GObject, Gegl
+
+gegl_inited = False
+try:
+    # Initialize GEGL before any pixel/buffer operations (required by GIMP 3.x)
+    Gegl.init([])
+    gegl_inited = True
+except Exception:
+    # In non-GIMP environments (editor/linter) Gegl may not initialize; ignore safely
+    gegl_inited = False
+
+# --- GI-only helper functions that call native GI methods (no PDB fallbacks) ---
+def image_select_rectangle(image, channel_ops, x, y, w, h):
+    # GI-only: use image.select_rectangle
+    try:
+        image.select_rectangle(channel_ops, x, y, w, h)
+        return
+    except Exception as e:
+        raise RuntimeError('GI image.select_rectangle not available: %s' % e)
 
 
+def selection_none(image):
+    try:
+        image.select_none()
+        return
+    except Exception as e:
+        raise RuntimeError('GI image.select_none not available: %s' % e)
+
+
+def context_set_background(color):
+    # GI-only context background setter
+    try:
+        Gimp.context_set_background(color)
+        return
+    except Exception as e:
+        raise RuntimeError('GI Gimp.context_set_background not available: %s' % e)
+
+
+def context_set_foreground(color):
+    try:
+        Gimp.context_set_foreground(color)
+        return
+    except Exception as e:
+        raise RuntimeError('GI Gimp.context_set_foreground not available: %s' % e)
+
+
+def edit_fill(drawable, fill_type):
+    try:
+        drawable.fill(fill_type)
+        return
+    except Exception as e:
+        raise RuntimeError('GI drawable.fill not available: %s' % e)
+
+
+def drawable_histogram(drawable, htype, low, high):
+    # GI-only: use drawable.get_histogram
+    try:
+        return drawable.get_histogram(htype, low, high)
+    except Exception as e:
+        raise RuntimeError('GI drawable.get_histogram not available: %s' % e)
+
+
+def text_fontname(runmode, image, layer, x, y, text, *args):
+    # Try a wide range of GI text APIs in order. If none available, raise informative error.
+    tried = []
+
+    # 1) Gimp.TextLayer constructors and variants
+    if hasattr(Gimp, 'TextLayer'):
+        TL = Gimp.TextLayer
+        for ctor in ('new', 'new_from_text', 'new_with_text', 'new_with_font', 'new_from_markup', 'new_wrapped'):
+            if hasattr(TL, ctor):
+                try:
+                    fn = getattr(TL, ctor)
+                    text_layer = fn(image, text)
+                    try:
+                        image.insert_layer(text_layer, None, 0)
+                    except Exception:
+                        pass
+                    return text_layer
+                except Exception as e:
+                    tried.append(('TextLayer.' + ctor, str(e)))
+
+    # 2) Module-level helper functions (many builds expose helpers)
+    for fn_name in (
+        'text_layer_new',
+        'text_layer_create',
+        'create_text_layer',
+        'text_layer_new_from_text',
+        'text_layer_new_with_font',
+    ):
+        if hasattr(Gimp, fn_name):
+            try:
+                fn = getattr(Gimp, fn_name)
+                layer_obj = fn(image, text)
+                return layer_obj
+            except Exception as e:
+                tried.append((fn_name, str(e)))
+
+    # 3) Try to create a generic layer and set text via common setters
+    try:
+        if hasattr(Gimp, 'Layer') and hasattr(Gimp.Layer, 'new'):
+            tl = Gimp.Layer.new(image, 1, 1, Gimp.ImageType.RGB, 'Text', 100, Gimp.LayerMode.NORMAL)
+            for setter in ('set_text', 'set_markup', 'set_plain_text', 'set_text_with_font'):
+                if hasattr(tl, setter):
+                    try:
+                        getattr(tl, setter)(text)
+                        break
+                    except Exception as e:
+                        tried.append((setter, str(e)))
+            try:
+                image.insert_layer(tl, None, 0)
+            except Exception:
+                pass
+            return tl
+    except Exception as e:
+        tried.append(('generic-layer', str(e)))
+
+    # 4) As last resort, try Pango + Cairo rendering into a new layer (best-effort)
+    try:
+        try:
+            import cairo as _cairo
+            gi.require_version('Pango', '1.0')
+            gi.require_version('PangoCairo', '1.0')
+            from gi.repository import Pango, PangoCairo
+        except Exception as e:
+            tried.append(('pangocairo-import', str(e)))
+            raise
+
+        # Create a temporary surface and context to measure text
+        surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32, 1, 1)
+        ctx = _cairo.Context(surface)
+        layout = PangoCairo.create_layout(ctx)
+        layout.set_text(text, -1)
+
+        # Optional font size from args (best-effort)
+        try:
+            fd = Pango.FontDescription()
+            if len(args) >= 2 and isinstance(args[1], (int, float)):
+                fd.set_size(int(args[1]) * Pango.SCALE)
+            layout.set_font_description(fd)
+        except Exception:
+            pass
+
+        w, h = layout.get_pixel_size()
+        if w <= 0:
+            w = max(1, len(text) * 8)
+        if h <= 0:
+            h = max(1, 12)
+
+        surface = _cairo.ImageSurface(_cairo.FORMAT_ARGB32, w, h)
+        ctx = _cairo.Context(surface)
+        PangoCairo.update_layout(ctx, layout)
+        ctx.set_source_rgba(0, 0, 0, 1)
+        PangoCairo.show_layout(ctx, layout)
+
+        # Extract surface bytes and convert ARGB32 -> RGBA
+        src_buf = surface.get_data()
+        src = memoryview(src_buf)
+        total_pixels = w * h
+        dst_bytes = bytearray(total_pixels * 4)
+        # Cairo image surface uses native-endian ARGB32 storing 4 bytes per pixel.
+        # Best-effort conversion: assume src order is BGRA or ARGB depending on endian.
+        try:
+            for i in range(total_pixels):
+                si = i * 4
+                b0 = src[si]
+                b1 = src[si + 1]
+                b2 = src[si + 2]
+                b3 = src[si + 3]
+                # treat as ARGB32 little-endian: b0 = B, b1 = G, b2 = R, b3 = A
+                r = b2
+                g = b1
+                b = b0
+                a = b3
+                di = i * 4
+                dst_bytes[di] = r
+                dst_bytes[di + 1] = g
+                dst_bytes[di + 2] = b
+                dst_bytes[di + 3] = a
+        except Exception as e:
+            tried.append(('cairo-conversion', str(e)))
+            raise
+
+        # Create a new layer and write bytes into its GEGL buffer
+        try:
+            text_layer = Gimp.Layer.new(image, w, h, Gimp.ImageType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
+            try:
+                image.insert_layer(text_layer, None, 0)
+            except Exception:
+                pass
+            if not gegl_inited:
+                raise RuntimeError('GEGL not initialized; cannot write text pixels')
+            buf = text_layer.get_buffer()
+            if buf is None:
+                raise RuntimeError('Created text layer has no GEGL buffer')
+
+            # attempt multiple writer methods
+            written = False
+            for writer in ('set_bytes', 'set_data', 'set_region', 'set_pixels', 'set_patch', 'write'):
+                if hasattr(buf, writer):
+                    try:
+                        fn = getattr(buf, writer)
+                        try:
+                            fn(0, 0, w, h, Gegl.Format.RGBA_U8, bytes(dst_bytes))
+                        except Exception:
+                            try:
+                                fn(bytes(dst_bytes))
+                            except Exception:
+                                fn()
+                        written = True
+                        break
+                    except Exception:
+                        pass
+
+            if not written:
+                raise RuntimeError('Failed to write text pixels into layer GEGL buffer')
+
+            try:
+                if hasattr(text_layer, 'queue_draw'):
+                    text_layer.queue_draw()
+            except Exception:
+                pass
+
+            return text_layer
+        except Exception as e:
+            tried.append(('create-text-layer', str(e)))
+            raise
+    except Exception:
+        # If pangocairo attempt failed, fall through to raising a diagnostic
+        raise RuntimeError('No suitable GI text-layer API found; tried: %s' % tried)
+
+
+def get_layer_by_name(image, name):
+    # Search manually through image.layers (GI)
+    for l in image.layers:
+        if getattr(l, 'name', None) == name:
+            return l
+    return None
+
+
+def insert_layer(image, layer, parent, position):
+    try:
+        image.insert_layer(layer, parent, position)
+        return
+    except Exception as e:
+        raise RuntimeError('GI image.insert_layer not available: %s' % e)
+
+
+def create_layer(image, width, height, image_type, name, opacity, mode):
+    # GI-only Layer creation
+    if not hasattr(Gimp, 'Layer') or not hasattr(Gimp.Layer, 'new'):
+        raise RuntimeError('Gimp.Layer.new not available in this GI binding')
+    try:
+        return Gimp.Layer.new(image, width, height, image_type, name, opacity, mode)
+    except Exception as e:
+        raise RuntimeError('Failed to create layer via GI: %s' % e)
+
+
+def layer_scale(layer, width, height, resize):
+    try:
+        layer.scale(width, height)
+        return
+    except Exception as e:
+        raise RuntimeError('GI layer.scale not available: %s' % e)
+
+
+def resize_image_to_layers(image):
+    try:
+        image.resize_to_layers()
+        return
+    except Exception as e:
+        raise RuntimeError('GI image.resize_to_layers not available: %s' % e)
+
+
+def copy_visible(image):
+    # GI-only: use image.merge_visible_layers to obtain a merged layer and return it
+    if not hasattr(image, 'merge_visible_layers'):
+        raise RuntimeError('GI image.merge_visible_layers not available')
+    try:
+        merged = image.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+        return merged
+    except Exception as e:
+        raise RuntimeError('Failed to merge visible layers via GI: %s' % e)
+
+
+def paste_into(drawable, source_layer):
+    # Ensure GEGL initialized before buffer operations
+    if not gegl_inited:
+        raise RuntimeError('GEGL not initialized; call Gegl.init() before paste_into')
+
+    # Copy pixel bytes from source_layer into drawable using GEGL buffers
+    src_buf = None
+    dst_buf = None
+    for getter in ('get_buffer', 'get_gegl_buffer', 'buffer'):
+        if hasattr(source_layer, getter):
+            try:
+                src_buf = getattr(source_layer, getter)()
+                break
+            except Exception:
+                try:
+                    src_buf = getattr(source_layer, getter)
+                    break
+                except Exception:
+                    pass
+
+    for getter in ('get_buffer', 'get_gegl_buffer', 'buffer'):
+        if hasattr(drawable, getter):
+            try:
+                dst_buf = getattr(drawable, getter)()
+                break
+            except Exception:
+                try:
+                    dst_buf = getattr(drawable, getter)
+                    break
+                except Exception:
+                    pass
+
+    if src_buf is None or dst_buf is None:
+        raise RuntimeError('Source or destination GEGL buffer missing')
+
+    w = min(getattr(source_layer, 'width', 0), getattr(drawable, 'width', 0))
+    h = min(getattr(source_layer, 'height', 0), getattr(drawable, 'height', 0))
+
+    # Read bytes from source using multiple possible methods
+    data = None
+    for reader in ('get_bytes', 'get_data', 'get_region', 'get_pixels', 'get_patch', 'read'):
+        if hasattr(src_buf, reader):
+            try:
+                fn = getattr(src_buf, reader)
+                # try a few call signatures
+                try:
+                    data = fn(0, 0, w, h, Gegl.Format.RGBA_U8)
+                except Exception:
+                    try:
+                        data = fn()
+                    except Exception:
+                        data = None
+                if data is not None:
+                    break
+            except Exception:
+                pass
+
+    if data is None:
+        raise RuntimeError('Failed to read bytes from source GEGL buffer')
+
+    if hasattr(data, 'get_data'):
+        try:
+            data_bytes = data.get_data()
+        except Exception:
+            data_bytes = bytes(data)
+    else:
+        data_bytes = bytes(data)
+
+    # Write bytes into destination buffer using multiple possible methods
+    written = False
+    for writer in ('set_bytes', 'set_data', 'set_region', 'set_pixels', 'set_patch', 'write'):
+        if hasattr(dst_buf, writer):
+            try:
+                fn = getattr(dst_buf, writer)
+                try:
+                    fn(0, 0, w, h, Gegl.Format.RGBA_U8, data_bytes)
+                except Exception:
+                    try:
+                        fn(data_bytes)
+                    except Exception:
+                        fn()
+                written = True
+                break
+            except Exception:
+                pass
+
+    if not written:
+        raise RuntimeError('Destination GEGL buffer does not support writing bytes')
+
+    # Mark drawable as changed if possible
+    try:
+        if hasattr(drawable, 'queue_draw'):
+            drawable.queue_draw()
+        elif hasattr(drawable, 'update'):
+            drawable.update(0, 0, drawable.width, drawable.height)
+    except Exception:
+        pass
+
+    return drawable
+
+
+def anchor_floating(floating):
+    try:
+        floating.anchor()
+        return
+    except Exception as e:
+        raise RuntimeError('GI floating.anchor not available: %s' % e)
+
+
+def remove_layer(image, layer):
+    try:
+        image.remove_layer(layer)
+        return
+    except Exception as e:
+        raise RuntimeError('GI image.remove_layer not available: %s' % e)
+
+
+def message(text):
+    # GI-only message
+    try:
+        Gimp.message(text)
+    except Exception:
+        # As a last resort, print to stdout (for debug purposes)
+        print(text)
+
+# --- End wrappers ---
 """Estimating the size of the image in the number of tiles by x and y.
 
 @param width Image width in pixels.
@@ -71,9 +483,43 @@ Each pixel with a specific color is included.
 
 def list_of_colors(layer):
     colors = set()
-    for y in range(layer.height):
-        for x in range(layer.width):
-            colors.add(layer.get_pixel(x, y))
+    if not gegl_inited:
+        raise RuntimeError('GEGL not initialized; call Gegl.init() before using buffers')
+
+    buffer = layer.get_buffer()
+    if buffer is None:
+        return colors
+
+    width = layer.width
+    height = layer.height
+    pixel_bytes = None
+
+    if hasattr(buffer, 'get_bytes'):
+        try:
+            pixel_bytes = buffer.get_bytes(0, 0, width, height, Gegl.Format.RGBA_U8)
+        except TypeError:
+            pixel_bytes = None
+    elif hasattr(buffer, 'get_data'):
+        pixel_bytes = buffer.get_data()
+
+    if pixel_bytes is None:
+        return colors
+
+    if hasattr(pixel_bytes, 'get_data'):
+        data = pixel_bytes.get_data()
+    else:
+        data = bytes(pixel_bytes)
+
+    if not data:
+        return colors
+
+    channels = 4
+    for y in range(height):
+        row_start = y * width * channels
+        for x in range(width):
+            pos = row_start + x * channels
+            colors.add((data[pos], data[pos + 1], data[pos + 2]))
+
     return colors
 
 
@@ -90,11 +536,18 @@ def list_of_colors(layer):
 def draw_random_tiles(layer, colors, columns, rows, side):
     for x in range(int(columns)):
         for y in range(int(rows)):
-            pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
-            pdb.gimp_context_set_background(random.choice(colors))
-            pdb.gimp_edit_fill(layer, 1)
+            image_select_rectangle(
+                layer.image,
+                Gimp.ChannelOps.REPLACE,
+                x * side,
+                y * side,
+                side,
+                side,
+            )
+            context_set_background(random.choice(colors))
+            edit_fill(layer, Gimp.FillType.FOREGROUND)
 
-    pdb.gimp_selection_none(layer.image)
+    selection_none(layer.image)
 
 
 """Estimate the average color in a layer.
@@ -106,10 +559,53 @@ def draw_random_tiles(layer, colors, columns, rows, side):
 
 
 def average_color(layer):
-    r, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_RED, 0, 1)
-    g, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_GREEN, 0, 1)
-    b, _, _, _, _, _ = pdb.gimp_drawable_histogram(layer, HISTOGRAM_BLUE, 0, 1)
-    return int(r), int(g), int(b)
+    if not gegl_inited:
+        raise RuntimeError('GEGL not initialized; call Gegl.init() before computing average color')
+
+    buffer = layer.get_buffer()
+    if buffer is None:
+        return 0, 0, 0
+
+    width = layer.width
+    height = layer.height
+    pixel_bytes = None
+
+    if hasattr(buffer, 'get_bytes'):
+        try:
+            pixel_bytes = buffer.get_bytes(0, 0, width, height, Gegl.Format.RGBA_U8)
+        except TypeError:
+            pixel_bytes = None
+    elif hasattr(buffer, 'get_data'):
+        pixel_bytes = buffer.get_data()
+
+    if pixel_bytes is None:
+        return 0, 0, 0
+
+    if hasattr(pixel_bytes, 'get_data'):
+        data = pixel_bytes.get_data()
+    else:
+        data = bytes(pixel_bytes)
+
+    if not data:
+        return 0, 0, 0
+
+    channels = 4
+    total_pixels = width * height
+    total_r = 0
+    total_g = 0
+    total_b = 0
+
+    for i in range(total_pixels):
+        pos = i * channels
+        total_r += data[pos]
+        total_g += data[pos + 1]
+        total_b += data[pos + 2]
+
+    return (
+        int(total_r / total_pixels),
+        int(total_g / total_pixels),
+        int(total_b / total_pixels),
+    )
 
 
 """Match an RGB color to the closest color in a list of colors.
@@ -158,11 +654,18 @@ def match_tiles(layer, colors, columns, rows, side):
     matched = []
     for x in range(int(columns)):
         for y in range(int(rows)):
-            pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
+            image_select_rectangle(
+                layer.image,
+                Gimp.ChannelOps.REPLACE,
+                x * side,
+                y * side,
+                side,
+                side,
+            )
             average = average_color(layer)
             matched.append(match_color(colors, average))
 
-    pdb.gimp_selection_none(layer.image)
+    selection_none(layer.image)
     return matched
 
 
@@ -180,11 +683,18 @@ def draw_solution_tiles(layer, solution, columns, rows, side):
     i = 0
     for x in range(int(columns)):
         for y in range(int(rows)):
-            pdb.gimp_image_select_rectangle(layer.image, 2, x * side, y * side, side, side)
-            pdb.gimp_context_set_background(solution[i])
-            pdb.gimp_edit_fill(layer, 1)
+            image_select_rectangle(
+                layer.image,
+                Gimp.ChannelOps.REPLACE,
+                x * side,
+                y * side,
+                side,
+                side,
+            )
+            context_set_background(solution[i])
+            edit_fill(layer, Gimp.FillType.FOREGROUND)
             i += 1
-    pdb.gimp_selection_none(layer.image)
+    selection_none(layer.image)
 
 
 """Draw numbers on tiles.
@@ -205,27 +715,39 @@ def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
     for x in range(int(columns)):
         for y in range(int(rows)):
             tile_color = solution[i]
-            pdb.gimp_context_set_foreground(
+            context_set_foreground(
                 (255 - tile_color[0], 255 - tile_color[1], 255 - tile_color[2])
             )
-            pdb.gimp_text_fontname(
+            text_fontname(
+                Gimp.RunMode.NONINTERACTIVE,
                 layer.image,
                 layer,
                 x * side,
                 y * side,
                 str(color_indices[tile_color] + 1),
                 -1,
-                FALSE,
+                False,
                 int(3 * side / 4),
                 0,
                 "Sans",
             )
             i += 1
 
-    pdb.gimp_image_remove_layer(
+    temp_layer = text_fontname(
+        Gimp.RunMode.NONINTERACTIVE,
         layer.image,
-        pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"),
+        layer,
+        0,
+        0,
+        "",
+        2,
+        1,
+        1,
+        0,
+        "Sans",
     )
+    if temp_layer is not None:
+        remove_layer(layer.image, temp_layer)
 
 
 """Draw tiles statistics.
@@ -240,9 +762,16 @@ def draw_tiles_numbering(layer, colors, solution, columns, rows, side):
 
 
 def draw_solution_statistics(layer, colors, solution, columns, rows, side):
-    pdb.gimp_image_select_rectangle(layer.image, 2, 0, 0, layer.width, layer.height)
-    pdb.gimp_context_set_background((255, 255, 255))
-    pdb.gimp_edit_fill(layer, 1)
+    image_select_rectangle(
+        layer.image,
+        Gimp.ChannelOps.REPLACE,
+        0,
+        0,
+        layer.width,
+        layer.height,
+    )
+    context_set_background((255, 255, 255))
+    edit_fill(layer, Gimp.FillType.BACKGROUND)
 
     counters = {c: 0 for c in colors}
     for c in solution:
@@ -253,11 +782,19 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
         size = 20
 
     for index, color in enumerate(colors):
-        pdb.gimp_image_select_rectangle(layer.image, 2, 0, index * size, size, size)
-        pdb.gimp_context_set_background(color)
-        pdb.gimp_edit_fill(layer, 1)
-        pdb.gimp_context_set_foreground((0, 0, 0))
-        pdb.gimp_text_fontname(
+        image_select_rectangle(
+            layer.image,
+            Gimp.ChannelOps.REPLACE,
+            0,
+            index * size,
+            size,
+            size,
+        )
+        context_set_background(color)
+        edit_fill(layer, Gimp.FillType.BACKGROUND)
+        context_set_foreground((0, 0, 0))
+        text_fontname(
+            Gimp.RunMode.NONINTERACTIVE,
             layer.image,
             layer,
             size,
@@ -269,7 +806,8 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
             0,
             "Sans",
         )
-        pdb.gimp_text_fontname(
+        text_fontname(
+            Gimp.RunMode.NONINTERACTIVE,
             layer.image,
             layer,
             2 * size,
@@ -281,7 +819,8 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
             0,
             "Sans",
         )
-        pdb.gimp_text_fontname(
+        text_fontname(
+            Gimp.RunMode.NONINTERACTIVE,
             layer.image,
             layer,
             4 * size,
@@ -294,11 +833,22 @@ def draw_solution_statistics(layer, colors, solution, columns, rows, side):
             "Sans",
         )
 
-    pdb.gimp_selection_none(layer.image)
-    pdb.gimp_image_remove_layer(
+    selection_none(layer.image)
+    temp_layer = text_fontname(
+        Gimp.RunMode.NONINTERACTIVE,
         layer.image,
-        pdb.gimp_text_fontname(layer.image, layer, 0, 0, "", 2, 1, 1, 0, "Sans"),
+        layer,
+        0,
+        0,
+        "",
+        2,
+        1,
+        1,
+        0,
+        "Sans",
     )
+    if temp_layer is not None:
+        remove_layer(layer.image, temp_layer)
 
 
 """Generation of a random chromosome.
@@ -400,14 +950,11 @@ def evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, solutio
     original.visible = True
     approximated.visible = True
 
-    pdb.gimp_edit_copy_visible(original.image)
-    floating = pdb.gimp_edit_paste(approximated, False)
-    pdb.gimp_floating_sel_anchor(floating)
+    merged = copy_visible(original.image)
+    pasted = paste_into(approximated, merged)
     original.visible = False
 
-    r, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_RED, 0, 1)
-    g, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_GREEN, 0, 1)
-    b, _, _, _, _, _ = pdb.gimp_drawable_histogram(approximated, HISTOGRAM_BLUE, 0, 1)
+    r, g, b = average_color(approximated)
     return (r + g + b) / 3.0
 
 
@@ -503,112 +1050,151 @@ def genetic_algorithm(
 """
 
 
-def plugin_main(
-    image,
-    drawable,
-    number_of_tiles=1,
-    optimizer="Simple",
-    suboptimal_initialization=TRUE,
-    number_of_generations=0,
-    population_size=3,
-    crossover_rate=1.0,
-    mutation_rate=0.0,
-    solution_numbering=FALSE,
-    solution_statistics=FALSE,
-    image_resize=TRUE,
-):
-    original = pdb.gimp_image_get_layer_by_name(image, "Original Image")
-    if original is None:
-        pdb.gimp_message("Original Image layer not found.")
-        return
+# --- GIMP 3.x plugin entrypoint ---
+# GIMP requires a Gimp.PlugIn subclass and registration via Gimp.main().
+class ImageToTilesConverter(Gimp.PlugIn):
+    __gtype_name__ = 'PythonFuImageToTilesConverter'
 
-    if number_of_tiles < 1:
-        number_of_tiles = 1
-
-    x_tiles, y_tiles, tile_side_length = dimensions_as_tiles(
-        original.width, original.height, number_of_tiles
-    )
-    number_of_tiles, image_new_width, image_new_height = image_setup(
-        x_tiles, y_tiles, tile_side_length
-    )
-
-    if image_resize:
-        pdb.gimp_context_set_interpolation(INTERPOLATION_LANCZOS)
-        pdb.gimp_layer_scale(original, image_new_width, image_new_height, False)
-        pdb.gimp_image_resize_to_layers(image)
-
-    original.mode = DIFFERENCE_MODE
-    color_map_layer = pdb.gimp_image_get_layer_by_name(image, "Color Map")
-    if color_map_layer is None:
-        pdb.gimp_message("Color Map layer not found.")
-        return
-
-    colors = list(list_of_colors(color_map_layer))
-    if not colors:
-        pdb.gimp_message("Color Map layer contains no colors.")
-        return
-
-    approximated = pdb.gimp_image_get_layer_by_name(image, "Approximated Image")
-    if approximated is None:
-        approximated = pdb.gimp_layer_new(
-            image,
-            image_new_width,
-            image_new_height,
-            RGB_IMAGE,
-            "Approximated Image",
-            100,
-            NORMAL_MODE,
+    def do_query_procedure(self):
+        procedure = Gimp.Procedure.new(
+            self,
+            'python-fu-image-to-tiles',
+            Gimp.ProcedureFlags.NONE,
+            Gimp.ValueType.NONE,
+            (),
         )
-        pdb.gimp_image_insert_layer(image, approximated, None, 2)
 
-    if optimizer == "Simple":
-        solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
-    elif optimizer == "Genetic Algorithm":
-        solution = genetic_algorithm(
-            original,
-            approximated,
-            colors,
-            x_tiles,
-            y_tiles,
-            tile_side_length,
+        procedure.set_menu_label('Image to Tiles Converter')
+        procedure.set_menu_path('<Image>/Image/Custom')
+        procedure.set_documentation(
+            'Raster image to tiles converter plug-in.',
+            'Converts a raster image into a tile-based approximation.',
+            'Todor Balabanov',
+        )
+        procedure.set_image_types('RGB*')
+
+        procedure.add_argument(Gimp.PDBArgType.IMAGE, 'image')
+        procedure.add_argument(Gimp.PDBArgType.DRAWABLE, 'drawable')
+        procedure.add_argument(Gimp.PDBArgType.INT32, 'number_of_tiles')
+        procedure.add_argument(Gimp.PDBArgType.STRING, 'optimizer')
+        procedure.add_argument(Gimp.PDBArgType.BOOLEAN, 'suboptimal_initialization')
+        procedure.add_argument(Gimp.PDBArgType.INT32, 'number_of_generations')
+        procedure.add_argument(Gimp.PDBArgType.INT32, 'population_size')
+        procedure.add_argument(Gimp.PDBArgType.FLOAT, 'crossover_rate')
+        procedure.add_argument(Gimp.PDBArgType.FLOAT, 'mutation_rate')
+        procedure.add_argument(Gimp.PDBArgType.BOOLEAN, 'image_resize')
+
+        self.add_procedure(procedure)
+
+    def do_run(self, procedure, run_mode, image, n_drawables, drawables, args, data):
+        number_of_tiles = args.get_child_value(0).get_int32()
+        optimizer = args.get_child_value(1).get_string()
+        suboptimal_initialization = args.get_child_value(2).get_boolean()
+        number_of_generations = args.get_child_value(3).get_int32()
+        population_size = args.get_child_value(4).get_int32()
+        crossover_rate = args.get_child_value(5).get_double()
+        mutation_rate = args.get_child_value(6).get_double()
+        image_resize = args.get_child_value(7).get_boolean()
+
+        self.run_plugin(
+            image,
+            drawables[0] if n_drawables >= 1 else None,
+            number_of_tiles,
+            optimizer,
             suboptimal_initialization,
             number_of_generations,
             population_size,
             crossover_rate,
             mutation_rate,
-        )
-    else:
-        solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
-
-    draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
-
-    if solution_numbering:
-        draw_tiles_numbering(
-            approximated,
-            colors,
-            solution,
-            x_tiles,
-            y_tiles,
-            tile_side_length,
+            image_resize,
         )
 
-    statistics = pdb.gimp_image_get_layer_by_name(image, "Tiles Statistics")
-    if solution_statistics:
-        if statistics is None:
-            statistics = pdb.gimp_layer_new(
+        return procedure.get_return_values()
+
+    def run_plugin(
+        self,
+        image,
+        drawable,
+        number_of_tiles,
+        optimizer,
+        suboptimal_initialization,
+        number_of_generations,
+        population_size,
+        crossover_rate,
+        mutation_rate,
+        image_resize,
+    ):
+        original = get_layer_by_name(image, 'Original Image')
+        if original is None:
+            message('Original Image layer not found.')
+            return
+
+        if number_of_tiles < 1:
+            number_of_tiles = 1
+
+        x_tiles, y_tiles, tile_side_length = dimensions_as_tiles(
+            original.width, original.height, number_of_tiles
+        )
+        _, image_new_width, image_new_height = image_setup(
+            x_tiles, y_tiles, tile_side_length
+        )
+
+        if image_resize:
+            try:
+                Gimp.context_set_interpolation(Gimp.Interpolation.LANCZOS)
+            except Exception:
+                pass
+            layer_scale(original, image_new_width, image_new_height, False)
+            resize_image_to_layers(image)
+
+        color_map_layer = get_layer_by_name(image, 'Color Map')
+        if color_map_layer is None:
+            message('Color Map layer not found.')
+            return
+
+        colors = list(list_of_colors(color_map_layer))
+        if not colors:
+            message('Color Map layer contains no colors.')
+            return
+
+        approximated = get_layer_by_name(image, 'Approximated Image')
+        if approximated is None:
+            approximated = create_layer(
                 image,
-                10 * x_tiles * tile_side_length,
-                10 * len(colors) * tile_side_length,
-                RGB_IMAGE,
-                "Tiles Statistics",
+                image_new_width,
+                image_new_height,
+                Gimp.ImageType.RGB,
+                'Approximated Image',
                 100,
-                NORMAL_MODE,
+                Gimp.LayerMode.NORMAL,
             )
-            pdb.gimp_image_insert_layer(image, statistics, None, 3)
-            pdb.gimp_image_resize_to_layers(image)
-        draw_solution_statistics(
-            statistics,
-            colors,
+            insert_layer(image, approximated, None, 2)
+
+        if optimizer == 'Genetic Algorithm':
+            solution = genetic_algorithm(
+                original,
+                approximated,
+                colors,
+                x_tiles,
+                y_tiles,
+                tile_side_length,
+                suboptimal_initialization,
+                number_of_generations,
+                population_size,
+                crossover_rate,
+                mutation_rate,
+            )
+        else:
+            solution = match_tiles(
+                original,
+                colors,
+                x_tiles,
+                y_tiles,
+                tile_side_length,
+            )
+
+        draw_solution_tiles(
+            approximated,
             solution,
             x_tiles,
             y_tiles,
@@ -616,75 +1202,6 @@ def plugin_main(
         )
 
 
-register(
-    "python_fu_image_to_tiles",
-    "Raster image to tiles converter plug-in.",
-    "When run this plug-in converts a raster image into a tiles image.",
-    "Todor Balabanov",
-    "Velbazhd Software LLC\nGPLv3 License",
-    "2021",
-    "<Image>/Image/Custom/Image to Tiles Converter",
-    "RGB*",
-    [
-        (PF_INT32, "number_of_tiles", "Desired Number of Tiles", 1),
-        (
-            PF_RADIO,
-            "optimizer",
-            "Optimizer",
-            "Simple",
-            (("Simple", "Simple"), ("Genetic Algorithm", "Genetic Algorithm")),
-        ),
-        (
-            PF_BOOL,
-            "suboptimal_initialization",
-            "Initialize the Population with Suboptimal Solutions",
-            TRUE,
-        ),
-        (
-            PF_INT32,
-            "number_of_generations",
-            "Number of Genetic Algorithm Generations",
-            0,
-        ),
-        (
-            PF_INT32,
-            "population_size",
-            "Genetic Algorithm Population Size",
-            3,
-        ),
-        (
-            PF_FLOAT,
-            "crossover_rate",
-            "Genetic Algorithm Crossover Rate",
-            0.95,
-        ),
-        (
-            PF_FLOAT,
-            "mutation_rate",
-            "Genetic Algorithm Mutation Rate",
-            0.01,
-        ),
-        (
-            PF_BOOL,
-            "solution_numbering",
-            "Numbering of the Result Solution",
-            FALSE,
-        ),
-        (
-            PF_BOOL,
-            "solution_statistics",
-            "Statistics of the Result Solution",
-            FALSE,
-        ),
-        (
-            PF_BOOL,
-            "image_resize",
-            "Image Resize to Fit Exact Tiles",
-            TRUE,
-        ),
-    ],
-    [],
-    plugin_main,
-)
-
-main()
+# Register the plugin class with GIMP 3.x.
+GObject.type_register(ImageToTilesConverter)
+Gimp.main(ImageToTilesConverter.__gtype_name__, sys.argv)
