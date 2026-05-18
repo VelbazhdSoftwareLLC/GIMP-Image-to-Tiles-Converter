@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env python3
 
 """ ============================================================================
-= GIMP Image to Tiles Converter version 1.0.0                                  =
+= GIMP Image to Tiles Converter version 1.0.1                                  =
 = Copyrights (C) 2021-2026 Velbazhd Software LLC                               =
 =                                                                              =
 = developed by Todor Balabanov ( todor.balabanov@gmail.com )                   =
@@ -30,6 +30,7 @@ import gi
 gi.require_version('Gimp', '3.0')
 gi.require_version('Gegl', '3.0')
 from gi.repository import Gimp, GObject, Gegl
+from gi.repository import GLib
 
 gegl_inited = False
 try:
@@ -130,7 +131,7 @@ def text_fontname(runmode, image, layer, x, y, text, *args):
     # 3) Try to create a generic layer and set text via common setters
     try:
         if hasattr(Gimp, 'Layer') and hasattr(Gimp.Layer, 'new'):
-            tl = Gimp.Layer.new(image, 1, 1, Gimp.ImageType.RGB, 'Text', 100, Gimp.LayerMode.NORMAL)
+            tl = Gimp.Layer.new(image, 1, 1, Gimp.ImageBaseType.RGB, 'Text', 100, Gimp.LayerMode.NORMAL)
             for setter in ('set_text', 'set_markup', 'set_plain_text', 'set_text_with_font'):
                 if hasattr(tl, setter):
                     try:
@@ -214,7 +215,7 @@ def text_fontname(runmode, image, layer, x, y, text, *args):
 
         # Create a new layer and write bytes into its GEGL buffer
         try:
-            text_layer = Gimp.Layer.new(image, w, h, Gimp.ImageType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
+            text_layer = Gimp.Layer.new(image, w, h, Gimp.ImageBaseType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
             try:
                 image.insert_layer(text_layer, None, 0)
             except Exception:
@@ -1060,45 +1061,116 @@ class ImageToTilesConverter(Gimp.PlugIn):
             self,
             'python-fu-image-to-tiles',
             Gimp.ProcedureFlags.NONE,
-            Gimp.ValueType.NONE,
-            (),
+            Gimp.PDBProcType.PLUGIN,
+            None,
         )
 
         procedure.set_menu_label('Image to Tiles Converter')
-        procedure.set_menu_path('<Image>/Image/Custom')
+        procedure.add_menu_path('<Image>/Image/Custom')
         procedure.set_documentation(
             'Raster image to tiles converter plug-in.',
             'Converts a raster image into a tile-based approximation.',
             'Todor Balabanov',
         )
-        procedure.set_image_types('RGB*')
+        procedure.set_image_types('*')
 
-        procedure.add_argument(Gimp.PDBArgType.IMAGE, 'image')
-        procedure.add_argument(Gimp.PDBArgType.DRAWABLE, 'drawable')
-        procedure.add_argument(Gimp.PDBArgType.INT32, 'number_of_tiles')
-        procedure.add_argument(Gimp.PDBArgType.STRING, 'optimizer')
-        procedure.add_argument(Gimp.PDBArgType.BOOLEAN, 'suboptimal_initialization')
-        procedure.add_argument(Gimp.PDBArgType.INT32, 'number_of_generations')
-        procedure.add_argument(Gimp.PDBArgType.INT32, 'population_size')
-        procedure.add_argument(Gimp.PDBArgType.FLOAT, 'crossover_rate')
-        procedure.add_argument(Gimp.PDBArgType.FLOAT, 'mutation_rate')
-        procedure.add_argument(Gimp.PDBArgType.BOOLEAN, 'image_resize')
+        procedure.add_argument(
+            GObject.ParamSpec.int(
+                'number_of_tiles',
+                'Number of tiles',
+                'Total number of desired tiles',
+                1,
+                2147483647,
+                1,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.string(
+                'optimizer',
+                'Optimizer',
+                'Optimizer to use',
+                'Genetic Algorithm',
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.boolean(
+                'suboptimal_initialization',
+                'Suboptimal initialization',
+                'Use suboptimal initialization for the genetic algorithm',
+                False,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.int(
+                'number_of_generations',
+                'Number of generations',
+                'Number of evolution generations',
+                1,
+                2147483647,
+                1,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.int(
+                'population_size',
+                'Population size',
+                'Population size for genetic algorithm',
+                1,
+                2147483647,
+                1,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.double(
+                'crossover_rate',
+                'Crossover rate',
+                'Genetic algorithm crossover probability',
+                0.0,
+                1.0,
+                0.5,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.double(
+                'mutation_rate',
+                'Mutation rate',
+                'Genetic algorithm mutation probability',
+                0.0,
+                1.0,
+                0.05,
+            )
+        )
+        procedure.add_argument(
+            GObject.ParamSpec.boolean(
+                'image_resize',
+                'Resize image',
+                'Resize image to fit generated tiles',
+                False,
+            )
+        )
 
         self.add_procedure(procedure)
 
-    def do_run(self, procedure, run_mode, image, n_drawables, drawables, args, data):
-        number_of_tiles = args.get_child_value(0).get_int32()
-        optimizer = args.get_child_value(1).get_string()
-        suboptimal_initialization = args.get_child_value(2).get_boolean()
-        number_of_generations = args.get_child_value(3).get_int32()
-        population_size = args.get_child_value(4).get_int32()
-        crossover_rate = args.get_child_value(5).get_double()
-        mutation_rate = args.get_child_value(6).get_double()
-        image_resize = args.get_child_value(7).get_boolean()
+    def do_run(self, procedure, run_mode, image, drawables, config, data):
+        number_of_tiles = config.get_property('number_of_tiles')
+        optimizer = config.get_property('optimizer')
+        suboptimal_initialization = config.get_property('suboptimal_initialization')
+        number_of_generations = config.get_property('number_of_generations')
+        population_size = config.get_property('population_size')
+        crossover_rate = config.get_property('crossover_rate')
+        mutation_rate = config.get_property('mutation_rate')
+        image_resize = config.get_property('image_resize')
+
+        first_drawable = None
+        try:
+            if drawables and len(drawables) >= 1:
+                first_drawable = drawables[0]
+        except Exception:
+            first_drawable = None
 
         self.run_plugin(
             image,
-            drawables[0] if n_drawables >= 1 else None,
+            first_drawable,
             number_of_tiles,
             optimizer,
             suboptimal_initialization,
@@ -1109,7 +1181,10 @@ class ImageToTilesConverter(Gimp.PlugIn):
             image_resize,
         )
 
-        return procedure.get_return_values()
+        return procedure.new_return_values(
+            Gimp.PDBStatusType.SUCCESS,
+            GLib.Error(),
+        )
 
     def run_plugin(
         self,
@@ -1129,7 +1204,7 @@ class ImageToTilesConverter(Gimp.PlugIn):
             message('Original Image layer not found.')
             return
 
-        if number_of_tiles < 1:
+        if number_of_tiles is None or number_of_tiles < 1:
             number_of_tiles = 1
 
         x_tiles, y_tiles, tile_side_length = dimensions_as_tiles(
@@ -1163,7 +1238,7 @@ class ImageToTilesConverter(Gimp.PlugIn):
                 image,
                 image_new_width,
                 image_new_height,
-                Gimp.ImageType.RGB,
+                Gimp.ImageBaseType.RGB,
                 'Approximated Image',
                 100,
                 Gimp.LayerMode.NORMAL,
