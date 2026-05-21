@@ -77,11 +77,34 @@ def context_set_foreground(color):
 
 
 def edit_fill(drawable, fill_type):
+    # Prefer the GIMP 3 edit_fill API when available, then fall back safely.
     try:
-        drawable.fill(fill_type)
-        return
-    except Exception as e:
-        raise RuntimeError('GI drawable.fill not available: %s' % e)
+        if hasattr(Gimp, 'edit_fill'):
+            Gimp.edit_fill(drawable, fill_type)
+            return
+    except Exception:
+        pass
+
+    try:
+        if hasattr(drawable, 'fill'):
+            drawable.fill(fill_type)
+            return
+    except Exception:
+        pass
+
+    try:
+        pdb = getattr(Gimp, 'pdb', None)
+        if pdb is not None:
+            if hasattr(pdb, 'gimp_edit_fill'):
+                pdb.gimp_edit_fill(drawable, fill_type)
+                return
+            if hasattr(pdb, 'gimp_drawable_fill'):
+                pdb.gimp_drawable_fill(drawable, fill_type)
+                return
+    except Exception:
+        pass
+
+    raise RuntimeError('GI drawable fill not available: no supported fill API found')
 
 
 def drawable_histogram(drawable, htype, low, high):
@@ -131,7 +154,7 @@ def text_fontname(runmode, image, layer, x, y, text, *args):
     # 3) Try to create a generic layer and set text via common setters
     try:
         if hasattr(Gimp, 'Layer') and hasattr(Gimp.Layer, 'new'):
-            tl = Gimp.Layer.new(image, 1, 1, Gimp.ImageBaseType.RGB, 'Text', 100, Gimp.LayerMode.NORMAL)
+            tl = Gimp.Layer.new(image, 1, 1, Gimp.ImageType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
             for setter in ('set_text', 'set_markup', 'set_plain_text', 'set_text_with_font'):
                 if hasattr(tl, setter):
                     try:
@@ -215,7 +238,7 @@ def text_fontname(runmode, image, layer, x, y, text, *args):
 
         # Create a new layer and write bytes into its GEGL buffer
         try:
-            text_layer = Gimp.Layer.new(image, w, h, Gimp.ImageBaseType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
+            text_layer = Gimp.Layer.new(image, w, h, Gimp.ImageType.RGBA, 'Text', 100, Gimp.LayerMode.NORMAL)
             try:
                 image.insert_layer(text_layer, None, 0)
             except Exception:
@@ -1161,12 +1184,7 @@ class ImageToTilesConverter(Gimp.PlugIn):
         mutation_rate = config.get_property('mutation_rate')
         image_resize = config.get_property('image_resize')
 
-        first_drawable = None
-        try:
-            if drawables and len(drawables) >= 1:
-                first_drawable = drawables[0]
-        except Exception:
-            first_drawable = None
+        first_drawable = drawables[0] if drawables else None
 
         self.run_plugin(
             image,
@@ -1238,7 +1256,7 @@ class ImageToTilesConverter(Gimp.PlugIn):
                 image,
                 image_new_width,
                 image_new_height,
-                Gimp.ImageBaseType.RGB,
+                Gimp.ImageType.RGB,
                 'Approximated Image',
                 100,
                 Gimp.LayerMode.NORMAL,
