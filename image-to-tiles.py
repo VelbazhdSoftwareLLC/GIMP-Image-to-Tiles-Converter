@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 """ ============================================================================
 = GIMP Image to Tiles Converter version 1.0.2                                  =
@@ -14,7 +14,7 @@ from copy import deepcopy
 from math import ceil, sqrt
 import gi
 gi.require_version('Gimp', '3.0')
-gi.require_version('Gegl', '3.0')
+gi.require_version('Gegl', '0.4')
 from gi.repository import Gimp, GObject, Gegl
 from gi.repository import GLib
 
@@ -25,7 +25,6 @@ try:
 except Exception:
     gegl_inited = False
 
-# --- GI-only helper functions ---
 def image_select_rectangle(image, channel_ops, x, y, w, h):
     try:
         image.select_rectangle(channel_ops, x, y, w, h)
@@ -124,7 +123,6 @@ def paste_into(drawable, source_layer):
         pass
     return drawable
 
-# --- Logic Core ---
 def dimensions_as_tiles(width, height, tiles):
     tile_area = width * height / tiles
     tile_side = ceil(sqrt(tile_area))
@@ -290,62 +288,59 @@ def genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_sid
 
     return best
 
-# --- GIMP 3.x Class Initialization ---
-class ImageToTilesConverter(Gimp.PlugIn):
+class ImageToTilesConverter (Gimp.PlugIn):
 
-    def do_query_procedure(self):
-        procedure = Gimp.ImageProcedure.new(
-            self,
-            'python-fu-image-to-tiles',
-            Gimp.PDBProcType.PLUGIN,
-            self.run_plugin,
-            None
-        )
+    def do_query_procedures(self):
+        return [ 'plug-in-image-to-tiles' ]
+
+    def do_create_procedure(self, name):
+        procedure = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, self.run, None)
+        
         procedure.set_image_types("*")
-        procedure.set_menu_label('Image to Tiles Converter')
-        procedure.add_menu_path('<Image>/Image/Custom')
+        procedure.set_menu_label("Image to Tiles Converter")
+        procedure.add_menu_path("<Image>/Image/Custom/")
         procedure.set_documentation(
             'Raster image to tiles converter plug-in.',
             'Converts a raster image into a tile-based approximation.',
             'Todor Balabanov'
         )
 
-        procedure.add_argument(GObject.ParamSpec.int(
+        procedure.add_int_argument(
             'number-of-tiles', 'Number of tiles', 'Total number of desired tiles',
             1, 2147483647, 100, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.string(
+        )
+        procedure.add_string_argument(
             'optimizer', 'Optimizer', 'Optimizer to use',
             'Simple', GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.boolean(
+        )
+        procedure.add_boolean_argument(
             'suboptimal-initialization', 'Suboptimal initialization', 'Use suboptimal initialization',
             True, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.int(
+        )
+        procedure.add_int_argument(
             'number-of-generations', 'Number of generations', 'Number of evolution generations',
             0, 2147483647, 10, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.int(
+        )
+        procedure.add_int_argument(
             'population-size', 'Population size', 'Population size for GA',
             1, 2147483647, 20, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.double(
+        )
+        procedure.add_double_argument(
             'crossover-rate', 'Crossover rate', 'Crossover probability',
             0.0, 1.0, 0.95, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.double(
+        )
+        procedure.add_double_argument(
             'mutation-rate', 'Mutation rate', 'Mutation probability',
             0.0, 1.0, 0.01, GObject.ParamFlags.READWRITE
-        ))
-        procedure.add_argument(GObject.ParamSpec.boolean(
+        )
+        procedure.add_boolean_argument(
             'image-resize', 'Resize image', 'Resize image to fit generated tiles',
             True, GObject.ParamFlags.READWRITE
-        ))
-
+        )
+        
         return procedure
 
-    def run_plugin(self, procedure, run_mode, image, drawables, config, data):
+    def run(self, procedure, run_mode, image, drawables, config, run_data):
         number_of_tiles = config.get_property('number-of-tiles')
         optimizer = config.get_property('optimizer')
         suboptimal_initialization = config.get_property('suboptimal-initialization')
@@ -371,7 +366,6 @@ class ImageToTilesConverter(Gimp.PlugIn):
             layer_scale(original, image_new_width, image_new_height, False)
             resize_image_to_layers(image)
 
-        # Force structural mode conversion instead of missing GIMP 2 properties
         original.set_mode(Gimp.LayerMode.DIFFERENCE)
 
         color_map_layer = get_layer_by_name(image, 'Color Map')
@@ -398,12 +392,11 @@ class ImageToTilesConverter(Gimp.PlugIn):
                 tile_side_length, suboptimal_initialization,
                 number_of_generations, population_size, crossover_rate, mutation_rate
             )
-        else:
+        elif optimizer == 'Simple':
             solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
 
         draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
-        return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+        return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
 
-GObject.type_register(ImageToTilesConverter)
-sys.exit(Gimp.main(ImageToTilesConverter.__gtype_name__, sys.argv))
+Gimp.main(ImageToTilesConverter.__gtype__, sys.argv)
