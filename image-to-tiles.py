@@ -8,6 +8,7 @@
 = Sofia, Bulgaria                                                              =
 ============================================================================ """
 
+from cmath import rect
 import sys
 import random
 from copy import deepcopy
@@ -33,17 +34,17 @@ def image_select_rectangle(image, channel_ops, x, y, w, h):
 
 def selection_none(image):
     try:
-        image.select_none()
+        Gimp.Selection.none(image)
     except Exception as e:
         raise RuntimeError('GI image.select_none not available: %s' % e)
 
-def context_set_background(color):
-    try:
-        gimp_color = Gimp.RGB()
-        gimp_color.set(color[0]/255.0, color[1]/255.0, color[2]/255.0)
-        Gimp.context_set_background(gimp_color)
-    except Exception as e:
-        raise RuntimeError('GI Gimp.context_set_background not available: %s' % e)
+# def context_set_background(color):
+#     try:
+#         gegl_color = Gegl.Color()
+#         gegl_color.set_rgba(color[0]/255.0, color[1]/255.0, color[2]/255.0, 1.0)
+#         Gimp.context_set_background(gegl_color)
+#     except Exception as e:
+#         raise RuntimeError('GI Gimp.context_set_background not available: %s' % e)
 
 def context_set_foreground(color):
     try:
@@ -53,18 +54,18 @@ def context_set_foreground(color):
     except Exception as e:
         raise RuntimeError('GI Gimp.context_set_foreground not available: %s' % e)
 
-def edit_fill(drawable, fill_type):
-    try:
-        drawable.fill(fill_type)
-        return
-    except Exception:
-        pass
-    raise RuntimeError('GI drawable fill not available')
+# def edit_fill(drawable, fill_type):
+#     try:
+#         drawable.fill(fill_type)
+#         return
+#     except Exception:
+#         pass
+#     raise RuntimeError('GI drawable fill not available')
 
 def get_layer_by_name(image, name):
-    for l in image.list_layers():
-        if getattr(l, 'get_name', lambda: None)() == name or getattr(l, 'name', None) == name:
-            return l
+    for layer in image.get_layers():
+        if layer.get_name() == name:
+            return layer
     return None
 
 def insert_layer(image, layer, parent, position):
@@ -143,8 +144,8 @@ def list_of_colors(layer):
     height = layer.get_height()
 
     try:
-        rect = Gegl.Rectangle.new(0, 0, width, height)
-        data = buffer.get(rect, 1.0, "RGBA u8", Gegl.AbyssPolicy.NONE)
+        rectangle = Gegl.Rectangle.new(0, 0, width, height)
+        data = buffer.get(rectangle, 1.0, "RGBA u8", Gegl.AbyssPolicy.NONE)
     except Exception:
         return colors
 
@@ -202,13 +203,30 @@ def match_tiles(layer, colors, columns, rows, side):
     selection_none(layer.get_image())
     return matched
 
+def draw_rectangle(drawable, x, y, w, h, color):
+    buffer = drawable.get_buffer()
+
+    rectangle = Gegl.Rectangle()
+    rectangle.x = x
+    rectangle.y = y
+    rectangle.width = w
+    rectangle.height = h
+
+    pixel = bytes([color[0],color[1],color[2],255])
+
+    row = pixel * w
+    data = row * h
+
+    buffer.set(rectangle,0,None,data)
+
 def draw_solution_tiles(layer, solution, columns, rows, side):
     i = 0
     for x in range(int(columns)):
         for y in range(int(rows)):
-            image_select_rectangle(layer.get_image(), Gimp.ChannelOps.REPLACE, x * side, y * side, side, side)
-            context_set_background(solution[i])
-            edit_fill(layer, Gimp.FillType.BACKGROUND)
+            # image_select_rectangle(layer.get_image(), Gimp.ChannelOps.REPLACE, x * side, y * side, side, side)
+            # context_set_background(solution[i])
+            # edit_fill(layer, Gimp.FillType.BACKGROUND)
+            draw_rectangle(layer, x * side, y * side, side, side, solution[i])
             i += 1
     selection_none(layer.get_image())
 
@@ -310,7 +328,7 @@ class ImageToTilesConverter (Gimp.PlugIn):
             1, 2147483647, 100, GObject.ParamFlags.READWRITE
         )
         procedure.add_string_argument(
-            'optimizer', 'Optimizer', 'Optimizer to use',
+            'optimizer-type', 'Optimizer', 'Optimizer to use',
             'Simple', GObject.ParamFlags.READWRITE
         )
         procedure.add_boolean_argument(
@@ -342,7 +360,7 @@ class ImageToTilesConverter (Gimp.PlugIn):
 
     def run(self, procedure, run_mode, image, drawables, config, run_data):
         number_of_tiles = config.get_property('number-of-tiles')
-        optimizer = config.get_property('optimizer')
+        optimizer_type = config.get_property('optimizer-type')
         suboptimal_initialization = config.get_property('suboptimal-initialization')
         number_of_generations = config.get_property('number-of-generations')
         population_size = config.get_property('population-size')
@@ -352,7 +370,7 @@ class ImageToTilesConverter (Gimp.PlugIn):
 
         original = get_layer_by_name(image, 'Original Image')
         if original is None:
-            message('Original Image layer not found.')
+            Gimp.message('Original Image layer not found.')
             return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error())
 
         x_tiles, y_tiles, tile_side_length = dimensions_as_tiles(
@@ -370,12 +388,12 @@ class ImageToTilesConverter (Gimp.PlugIn):
 
         color_map_layer = get_layer_by_name(image, 'Color Map')
         if color_map_layer is None:
-            message('Color Map layer not found.')
+            Gimp.message('Color Map layer not found.')
             return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error())
 
         colors = list(list_of_colors(color_map_layer))
         if not colors:
-            message('Color Map layer contains no colors.')
+            Gimp.message('Color Map layer contains no colors.')
             return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error())
 
         approximated = get_layer_by_name(image, 'Approximated Image')
@@ -386,15 +404,17 @@ class ImageToTilesConverter (Gimp.PlugIn):
             )
             insert_layer(image, approximated, None, 0)
 
-        if optimizer == 'Genetic Algorithm':
+        if optimizer_type == 'Simple':
+            solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
+        elif optimizer_type == 'Genetic Algorithm':
             solution = genetic_algorithm(
                 original, approximated, colors, x_tiles, y_tiles,
                 tile_side_length, suboptimal_initialization,
                 number_of_generations, population_size, crossover_rate, mutation_rate
             )
-        elif optimizer == 'Simple':
-            solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
 
+        Gimp.message('Checking: {0}'.format(solution))
+        Gimp.message('Checking: {0}'.format(colors))
         draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
