@@ -9,14 +9,16 @@
 ============================================================================ """
 
 from cmath import rect
+from email.mime import image
 import sys
 import random
 from copy import deepcopy
 from math import ceil, sqrt
 import gi
+gi.require_version('Gtk', '3.0')
 gi.require_version('Gimp', '3.0')
 gi.require_version('Gegl', '0.4')
-from gi.repository import Gimp, GObject, Gegl
+from gi.repository import Gimp, GObject, Gegl, Gtk
 from gi.repository import GLib
 
 gegl_inited = False
@@ -37,30 +39,6 @@ def selection_none(image):
         Gimp.Selection.none(image)
     except Exception as e:
         raise RuntimeError('GI image.select_none not available: %s' % e)
-
-# def context_set_background(color):
-#     try:
-#         gegl_color = Gegl.Color()
-#         gegl_color.set_rgba(color[0]/255.0, color[1]/255.0, color[2]/255.0, 1.0)
-#         Gimp.context_set_background(gegl_color)
-#     except Exception as e:
-#         raise RuntimeError('GI Gimp.context_set_background not available: %s' % e)
-
-def context_set_foreground(color):
-    try:
-        gimp_color = Gimp.RGB()
-        gimp_color.set(color[0]/255.0, color[1]/255.0, color[2]/255.0)
-        Gimp.context_set_foreground(gimp_color)
-    except Exception as e:
-        raise RuntimeError('GI Gimp.context_set_foreground not available: %s' % e)
-
-# def edit_fill(drawable, fill_type):
-#     try:
-#         drawable.fill(fill_type)
-#         return
-#     except Exception:
-#         pass
-#     raise RuntimeError('GI drawable fill not available')
 
 def get_layer_by_name(image, name):
     for layer in image.get_layers():
@@ -157,16 +135,14 @@ def list_of_colors(layer):
             colors.add((data[pos], data[pos + 1], data[pos + 2]))
     return colors
 
-def average_color(layer):
+def average_color(layer, x, y, width, height):
     if not gegl_inited:
         return 0, 0, 0
 
     buffer = layer.get_buffer()
-    width = layer.get_width()
-    height = layer.get_height()
 
     try:
-        rect = Gegl.Rectangle.new(0, 0, width, height)
+        rect = Gegl.Rectangle.new(x, y, width, height)
         data = buffer.get(rect, 1.0, "RGBA u8", Gegl.AbyssPolicy.NONE)
     except Exception:
         return 0, 0, 0
@@ -197,35 +173,24 @@ def match_tiles(layer, colors, columns, rows, side):
     matched = []
     for x in range(int(columns)):
         for y in range(int(rows)):
-            image_select_rectangle(layer.get_image(), Gimp.ChannelOps.REPLACE, x * side, y * side, side, side)
-            average = average_color(layer)
+            tile_x = x * side
+            tile_y = y * side
+            average = average_color(layer, tile_x, tile_y, side, side)
             matched.append(match_color(colors, average))
     selection_none(layer.get_image())
     return matched
 
 def draw_rectangle(drawable, x, y, w, h, color):
-    buffer = drawable.get_buffer()
-
-    rectangle = Gegl.Rectangle()
-    rectangle.x = x
-    rectangle.y = y
-    rectangle.width = w
-    rectangle.height = h
-
-    pixel = bytes([color[0],color[1],color[2],255])
-
-    row = pixel * w
-    data = row * h
-
-    buffer.set(rectangle,0,None,data)
+    rectangle = Gegl.Rectangle.new(x, y, w, h)
+    tile = (bytes([color[0], color[1], color[2], 255]) * w) * h
+    drawable.get_buffer().set(rectangle, "RGBA u8", tile)
+    drawable.update(x, y, w, h)
+    Gimp.displays_flush()
 
 def draw_solution_tiles(layer, solution, columns, rows, side):
     i = 0
     for x in range(int(columns)):
         for y in range(int(rows)):
-            # image_select_rectangle(layer.get_image(), Gimp.ChannelOps.REPLACE, x * side, y * side, side, side)
-            # context_set_background(solution[i])
-            # edit_fill(layer, Gimp.FillType.BACKGROUND)
             draw_rectangle(layer, x * side, y * side, side, side, solution[i])
             i += 1
     selection_none(layer.get_image())
@@ -260,13 +225,21 @@ def mutation(probability, colors, child):
         if random.random() < probability:
             child[i] = random.choice(colors)
 
+def set_visibility(layers, visible=False):
+    for layer in layers:
+        layer.set_visible(visible)
+        if layer.is_group():
+            set_visibility(layer.list_children(), visible)
+
 def evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, solution):
     draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
-    for layer in original.get_image().list_layers():
-        layer.set_visible(False)
+
+    set_visibility(original.get_image().get_layers(), visible=False)
     original.set_visible(True)
     approximated.set_visible(True)
-
+    Gimp.displays_flush()
+    
+    Gimp.message('Checking: {0}'.format(True))
     merged = copy_visible(original.get_image())
     paste_into(approximated, merged)
     original.set_visible(False)
@@ -274,7 +247,7 @@ def evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, solutio
     r, g, b = average_color(approximated)
     return (r + g + b) / 3.0
 
-def genetic_algorithm(original, approximated, colors, x_tiles, y_tiles, tile_side_length,
+def genetic_algorithm(image, original, approximated, colors, x_tiles, y_tiles, tile_side_length,
                       suboptimal_initialization, number_of_generations, population_size, crossover_rate, mutation_rate):
     if population_size < 1:
         population_size = 1
@@ -359,6 +332,116 @@ class ImageToTilesConverter (Gimp.PlugIn):
         return procedure
 
     def run(self, procedure, run_mode, image, drawables, config, run_data):
+        if run_mode == Gimp.RunMode.INTERACTIVE:
+            try:
+                dialog = Gtk.Dialog(
+                    title="Image to Tiles Converter",
+                    flags=Gtk.DialogFlags.MODAL,
+                    buttons=(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                             Gtk.STOCK_OK, Gtk.ResponseType.OK)
+                )
+                dialog.set_size_request(400, 400)
+                
+                vbox = dialog.get_content_area()
+                
+                # Number of tiles
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Number of tiles:")
+                spin = Gtk.SpinButton()
+                spin.set_range(1, 2147483647)
+                spin.set_value(config.get_property('number-of-tiles'))
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(spin, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Optimizer type
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Optimizer:")
+                combo = Gtk.ComboBoxText()
+                combo.append_text("Simple")
+                combo.append_text("Genetic Algorithm")
+                optimizer_type = config.get_property('optimizer-type')
+                if optimizer_type == "Simple":
+                    combo.set_active(0)
+                else:
+                    combo.set_active(1)
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(combo, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Suboptimal initialization
+                check_subopt = Gtk.CheckButton(label="Suboptimal initialization")
+                check_subopt.set_active(config.get_property('suboptimal-initialization'))
+                vbox.pack_start(check_subopt, False, False, 0)
+                
+                # Number of generations
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Number of generations:")
+                spin_gen = Gtk.SpinButton()
+                spin_gen.set_range(0, 2147483647)
+                spin_gen.set_value(config.get_property('number-of-generations'))
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(spin_gen, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Population size
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Population size:")
+                spin_pop = Gtk.SpinButton()
+                spin_pop.set_range(1, 2147483647)
+                spin_pop.set_value(config.get_property('population-size'))
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(spin_pop, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Crossover rate
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Crossover rate:")
+                spin_cross = Gtk.SpinButton()
+                spin_cross.set_range(0.0, 1.0)
+                spin_cross.set_digits(2)
+                spin_cross.set_value(config.get_property('crossover-rate'))
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(spin_cross, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Mutation rate
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                label = Gtk.Label(label="Mutation rate:")
+                spin_mut = Gtk.SpinButton()
+                spin_mut.set_range(0.0, 1.0)
+                spin_mut.set_digits(2)
+                spin_mut.set_value(config.get_property('mutation-rate'))
+                hbox.pack_start(label, False, False, 0)
+                hbox.pack_end(spin_mut, False, False, 0)
+                vbox.pack_start(hbox, False, False, 0)
+                
+                # Image resize
+                check_resize = Gtk.CheckButton(label="Resize image")
+                check_resize.set_active(config.get_property('image-resize'))
+                vbox.pack_start(check_resize, False, False, 0)
+                
+                vbox.show_all()
+                
+                response = dialog.run()
+                if response == Gtk.ResponseType.OK:
+                    config.set_property('number-of-tiles', int(spin.get_value()))
+                    config.set_property('optimizer-type', combo.get_active_text())
+                    config.set_property('suboptimal-initialization', check_subopt.get_active())
+                    config.set_property('number-of-generations', int(spin_gen.get_value()))
+                    config.set_property('population-size', int(spin_pop.get_value()))
+                    config.set_property('crossover-rate', spin_cross.get_value())
+                    config.set_property('mutation-rate', spin_mut.get_value())
+                    config.set_property('image-resize', check_resize.get_active())
+                
+                dialog.destroy()
+                
+                if response != Gtk.ResponseType.OK:
+                    return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+            except Exception as e:
+                Gimp.message('Dialog error: {0}'.format(str(e)))
+                return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error())
+        
         number_of_tiles = config.get_property('number-of-tiles')
         optimizer_type = config.get_property('optimizer-type')
         suboptimal_initialization = config.get_property('suboptimal-initialization')
@@ -407,14 +490,14 @@ class ImageToTilesConverter (Gimp.PlugIn):
         if optimizer_type == 'Simple':
             solution = match_tiles(original, colors, x_tiles, y_tiles, tile_side_length)
         elif optimizer_type == 'Genetic Algorithm':
-            solution = genetic_algorithm(
+            solution = genetic_algorithm(image,
                 original, approximated, colors, x_tiles, y_tiles,
                 tile_side_length, suboptimal_initialization,
                 number_of_generations, population_size, crossover_rate, mutation_rate
             )
+            Gimp.message('Checking: {0}'.format(colors))
+            Gimp.message('Checking: {0}'.format(solution))
 
-        Gimp.message('Checking: {0}'.format(solution))
-        Gimp.message('Checking: {0}'.format(colors))
         draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
