@@ -8,8 +8,6 @@
 = Sofia, Bulgaria                                                              =
 ============================================================================ """
 
-from cmath import rect
-from email.mime import image
 import sys
 import random
 from copy import deepcopy
@@ -185,7 +183,6 @@ def draw_rectangle(drawable, x, y, w, h, color):
     tile = (bytes([color[0], color[1], color[2], 255]) * w) * h
     drawable.get_buffer().set(rectangle, "RGBA u8", tile)
     drawable.update(x, y, w, h)
-    Gimp.displays_flush()
 
 def draw_solution_tiles(layer, solution, columns, rows, side):
     i = 0
@@ -237,15 +234,18 @@ def evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, solutio
     set_visibility(original.get_image().get_layers(), visible=False)
     original.set_visible(True)
     approximated.set_visible(True)
-    Gimp.displays_flush()
     
     Gimp.message('Checking: {0}'.format(True))
-    merged = copy_visible(original.get_image())
-    paste_into(approximated, merged)
+    merged = Gimp.Layer.new_from_visible(original.get_image(), original.get_image(), "Composite Layer")
+    original.get_image().insert_layer(merged, None, 0)
     original.set_visible(False)
 
-    r, g, b = average_color(approximated)
-    return (r + g + b) / 3.0
+    r, g, b = average_color(merged, 0, 0, merged.get_width(), merged.get_height())
+    fitness = (r + g + b) / 3.0
+    
+    original.get_image().remove_layer(merged)
+    
+    return fitness
 
 def genetic_algorithm(image, original, approximated, colors, x_tiles, y_tiles, tile_side_length,
                       suboptimal_initialization, number_of_generations, population_size, crossover_rate, mutation_rate):
@@ -258,7 +258,7 @@ def genetic_algorithm(image, original, approximated, colors, x_tiles, y_tiles, t
     else:
         population = [random_chromosome(colors, x_tiles * y_tiles) for _ in range(population_size)]
 
-    fitness = [evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, ind) for ind in population]
+    fitness = [evaluate(original, approximated, x_tiles, y_tiles, tile_side_length, individual) for individual in population]
     best_idx = min(range(population_size), key=lambda idx: fitness[idx])
     best = deepcopy(population[best_idx])
     best_fitness = fitness[best_idx]
@@ -499,6 +499,7 @@ class ImageToTilesConverter (Gimp.PlugIn):
             Gimp.message('Checking: {0}'.format(solution))
 
         draw_solution_tiles(approximated, solution, x_tiles, y_tiles, tile_side_length)
+        Gimp.displays_flush()
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
 
